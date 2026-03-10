@@ -1,0 +1,10 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+python-dotenv>=1.0.0
+llama-index==0.11.22
+llama-index-vector-stores-chroma==0.2.1
+llama-index-embeddings-ollama==0.3.1
+llama-index-llms-openai==0.2.16
+llama-index-readers-file==0.2.2
+chromadb==0.5.23
+pydantic==2.9.2

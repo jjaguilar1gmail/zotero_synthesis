@@ -2,9 +2,10 @@ import os
 import sqlite3
 import json
 import logging
+import re
 import traceback
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 
@@ -12,11 +13,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.vector_stores.types import VectorStoreQuery, VectorStoreQueryResult
 from llama_index.vector_stores.chroma import ChromaVectorStore
+from llama_index.vector_stores.chroma.base import _to_chroma_filter
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.openai_like import OpenAILike
 from llama_index.readers.file import PDFReader
@@ -61,13 +64,252 @@ chroma_client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 # ── In-memory chat history per collection ────────────────────────────────────
 chat_histories: dict[str, list[dict]] = {}
 
+
+class PaperMetadata(BaseModel):
+    zotero_item_key: str
+    attachment_key: str
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    year: Optional[int] = None
+    journal_venue: str = ""
+    abstract: str = ""
+    tags: list[str] = Field(default_factory=list)
+    collection_id: int
+    page_number: Optional[int] = None
+    section_label: str = ""
+    parent_paper_id: str
+
+
+class PaperRecord(BaseModel):
+    paper_id: str
+    file_path: Path
+    metadata: PaperMetadata
+    parsed_text: str = ""
+    chunks: list[str] = Field(default_factory=list)
+    generated_summary: Optional[str] = None
+
+
+class SafeChromaVectorStore(ChromaVectorStore):
+    def query(self, query: VectorStoreQuery, **kwargs: Any) -> VectorStoreQueryResult:
+        if query.filters is not None:
+            if "where" in kwargs:
+                raise ValueError(
+                    "Cannot specify metadata filters via both query and kwargs. "
+                    "Use kwargs only for chroma specific items that are not supported via the generic query interface."
+                )
+            where = _to_chroma_filter(query.filters)
+        else:
+            where = kwargs.pop("where", None)
+
+        if not query.query_embedding:
+            return self._get(limit=query.similarity_top_k, where=where, **kwargs)
+
+        return self._query(
+            query_embeddings=query.query_embedding,
+            n_results=query.similarity_top_k,
+            where=where,
+            **kwargs,
+        )
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Zotero helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+def get_zotero_connection() -> sqlite3.Connection:
+    return sqlite3.connect(
+        f"file:{ZOTERO_DB}?mode=ro&immutable=1", uri=True, timeout=5
+    )
+
+
+def extract_year(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    match = re.search(r"\b(19|20)\d{2}\b", value)
+    return int(match.group(0)) if match else None
+
+
+def parse_page_number(value: Optional[str | int]) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    match = re.search(r"\d+", str(value))
+    return int(match.group(0)) if match else None
+
+
+def format_creator_name(first_name: Optional[str], last_name: Optional[str], field_mode: int) -> str:
+    if field_mode == 1:
+        return (last_name or first_name or "").strip()
+    return " ".join(part for part in [first_name, last_name] if part).strip()
+
+
+def resolve_attachment_path(attachment_key: str, attachment_path: Optional[str]) -> Optional[Path]:
+    if attachment_path:
+        normalized = attachment_path.replace("\\", "/")
+        if normalized.startswith("storage:"):
+            relative_name = normalized.split(":", 1)[1].lstrip("/")
+            candidate = ZOTERO_STORE / attachment_key / relative_name
+            if candidate.exists():
+                return candidate
+        else:
+            raw_path = attachment_path
+            if raw_path.startswith("attachments:"):
+                raw_path = raw_path.split(":", 1)[1]
+            candidate = Path(raw_path)
+            if not candidate.is_absolute():
+                candidate = ZOTERO_BASE / raw_path
+            if candidate.exists():
+                return candidate
+
+    folder = ZOTERO_STORE / attachment_key
+    if folder.exists():
+        pdfs = sorted(folder.glob("*.pdf"))
+        if pdfs:
+            return pdfs[0]
+    return None
+
+
+def get_item_field_map(cur: sqlite3.Cursor, item_id: int) -> dict[str, str]:
+    cur.execute(
+        """
+        SELECT f.fieldName, v.value
+        FROM itemData d
+        JOIN fields f ON f.fieldID = d.fieldID
+        JOIN itemDataValues v ON v.valueID = d.valueID
+        WHERE d.itemID = ?
+        """,
+        (item_id,),
+    )
+    return {field_name: value for field_name, value in cur.fetchall() if value}
+
+
+def get_item_creators(cur: sqlite3.Cursor, item_id: int) -> list[str]:
+    cur.execute(
+        """
+        SELECT c.firstName, c.lastName, c.fieldMode
+        FROM itemCreators ic
+        JOIN creators c ON c.creatorID = ic.creatorID
+        WHERE ic.itemID = ?
+        ORDER BY ic.orderIndex
+        """,
+        (item_id,),
+    )
+    creators = []
+    for first_name, last_name, field_mode in cur.fetchall():
+        name = format_creator_name(first_name, last_name, field_mode)
+        if name:
+            creators.append(name)
+    return creators
+
+
+def get_item_tags(cur: sqlite3.Cursor, item_id: int) -> list[str]:
+    cur.execute(
+        """
+        SELECT t.name
+        FROM itemTags it
+        JOIN tags t ON t.tagID = it.tagID
+        WHERE it.itemID = ?
+        ORDER BY t.name
+        """,
+        (item_id,),
+    )
+    return [tag for (tag,) in cur.fetchall() if tag]
+
+
+def get_paper_records_for_collection(collection_id: int) -> list[PaperRecord]:
+    conn = get_zotero_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT
+            COALESCE(parent.itemID, attachment.itemID) AS paper_item_id,
+            COALESCE(parent.key, attachment.key) AS paper_item_key,
+            attachment.key AS attachment_key,
+            ia.path AS attachment_path
+        FROM collectionItems ci
+        JOIN itemAttachments ia
+            ON (ci.itemID = ia.parentItemID OR ci.itemID = ia.itemID)
+        JOIN items attachment ON attachment.itemID = ia.itemID
+        LEFT JOIN items parent ON parent.itemID = ia.parentItemID
+        WHERE ci.collectionID = ?
+          AND ia.contentType = 'application/pdf'
+        ORDER BY paper_item_id
+        """,
+        (collection_id,),
+    )
+
+    records: list[PaperRecord] = []
+    for paper_item_id, paper_item_key, attachment_key, attachment_path in cur.fetchall():
+        file_path = resolve_attachment_path(attachment_key, attachment_path)
+        if not file_path:
+            logger.warning(
+                "Skipping attachment %s for paper %s because the PDF path could not be resolved",
+                attachment_key,
+                paper_item_key,
+            )
+            continue
+
+        field_map = get_item_field_map(cur, paper_item_id)
+        title = field_map.get("title") or file_path.stem
+        journal_venue = (
+            field_map.get("publicationTitle")
+            or field_map.get("proceedingsTitle")
+            or field_map.get("bookTitle")
+            or field_map.get("websiteTitle")
+            or field_map.get("repository")
+            or ""
+        )
+
+        metadata = PaperMetadata(
+            zotero_item_key=paper_item_key,
+            attachment_key=attachment_key,
+            title=title,
+            authors=get_item_creators(cur, paper_item_id),
+            year=extract_year(field_map.get("date")),
+            journal_venue=journal_venue,
+            abstract=field_map.get("abstractNote", ""),
+            tags=get_item_tags(cur, paper_item_id),
+            collection_id=collection_id,
+            parent_paper_id=paper_item_key,
+        )
+        records.append(
+            PaperRecord(
+                paper_id=paper_item_key,
+                file_path=file_path,
+                metadata=metadata,
+            )
+        )
+
+    conn.close()
+    return records
+
+
+def build_chunk_metadata(
+    paper_record: PaperRecord,
+    collection_name: str,
+    page_number: Optional[int],
+) -> dict:
+    return {
+        "source_file": paper_record.file_path.name,
+        "collection": collection_name,
+        "zotero_item_key": paper_record.metadata.zotero_item_key,
+        "attachment_key": paper_record.metadata.attachment_key,
+        "title": paper_record.metadata.title,
+        "authors": json.dumps(paper_record.metadata.authors, ensure_ascii=True),
+        "year": paper_record.metadata.year if paper_record.metadata.year is not None else -1,
+        "journal_venue": paper_record.metadata.journal_venue,
+        "abstract": paper_record.metadata.abstract,
+        "tags": json.dumps(paper_record.metadata.tags, ensure_ascii=True),
+        "collection_id": paper_record.metadata.collection_id,
+        "page_number": page_number if page_number is not None else -1,
+        "section_label": paper_record.metadata.section_label,
+        "parent_paper_id": paper_record.metadata.parent_paper_id,
+    }
+
 def get_zotero_collections() -> list[dict]:
     """Return all top-level and nested collections with their names."""
-    conn = sqlite3.connect(f"file:{ZOTERO_DB}?mode=ro&immutable=1", uri=True, timeout=5)
+    conn = get_zotero_connection()
     cur = conn.cursor()
     cur.execute("""
         SELECT collectionID, collectionName, parentCollectionID
@@ -82,38 +324,7 @@ def get_zotero_collections() -> list[dict]:
 
 def get_pdfs_for_collection(collection_id: int) -> list[Path]:
     """Return all PDF file paths for items in a Zotero collection."""
-    conn = sqlite3.connect(f"file:{ZOTERO_DB}?mode=ro&immutable=1", uri=True, timeout=5)
-    cur = conn.cursor()
-    # PDF attachments whose parent item is in the collection
-    cur.execute("""
-        SELECT i.key
-        FROM collectionItems ci
-        JOIN itemAttachments ia ON ci.itemID = ia.parentItemID
-        JOIN items i ON ia.itemID = i.itemID
-        WHERE ci.collectionID = ?
-          AND ia.contentType = 'application/pdf'
-    """, (collection_id,))
-    keys = [r[0] for r in cur.fetchall()]
-
-    # PDF attachments that are themselves directly in the collection
-    cur.execute("""
-        SELECT i.key
-        FROM collectionItems ci
-        JOIN items i ON ci.itemID = i.itemID
-        JOIN itemAttachments ia ON ia.itemID = i.itemID
-        WHERE ci.collectionID = ?
-          AND ia.contentType = 'application/pdf'
-    """, (collection_id,))
-    keys += [r[0] for r in cur.fetchall()]
-    conn.close()
-
-    paths = []
-    for key in set(keys):
-        folder = ZOTERO_STORE / key
-        if folder.exists():
-            for pdf in folder.glob("*.pdf"):
-                paths.append(pdf)
-    return paths
+    return [record.file_path for record in get_paper_records_for_collection(collection_id)]
 
 
 def collection_chroma_name(collection_id: int) -> str:
@@ -122,8 +333,8 @@ def collection_chroma_name(collection_id: int) -> str:
 
 def index_collection(collection_id: int, collection_name: str) -> dict:
     """Index all PDFs in a collection into ChromaDB."""
-    pdfs = get_pdfs_for_collection(collection_id)
-    if not pdfs:
+    paper_records = get_paper_records_for_collection(collection_id)
+    if not paper_records:
         return {"indexed": 0, "message": "No PDFs found in this collection"}
 
     chroma_name = collection_chroma_name(collection_id)
@@ -135,7 +346,7 @@ def index_collection(collection_id: int, collection_name: str) -> dict:
         pass
 
     chroma_collection = chroma_client.get_or_create_collection(chroma_name)
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+    vector_store = SafeChromaVectorStore(chroma_collection=chroma_collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
     reader = PDFReader()
@@ -143,16 +354,36 @@ def index_collection(collection_id: int, collection_name: str) -> dict:
     loaded = []
     failed = []
 
-    for pdf_path in pdfs:
+    for paper_record in paper_records:
         try:
-            docs = reader.load_data(file=pdf_path)
+            docs = reader.load_data(file=paper_record.file_path)
+            page_texts = []
             for doc in docs:
-                doc.metadata["source_file"] = pdf_path.name
-                doc.metadata["collection"] = collection_name
+                page_texts.append(doc.text)
+                page_number = parse_page_number(
+                    doc.metadata.get("page_label") or doc.metadata.get("page")
+                )
+                doc.metadata.update(
+                    build_chunk_metadata(paper_record, collection_name, page_number)
+                )
+            paper_record.parsed_text = "\n\n".join(page_texts)
+            paper_record.chunks = page_texts
             all_docs.extend(docs)
-            loaded.append(pdf_path.name)
+            loaded.append(
+                {
+                    "file": paper_record.file_path.name,
+                    "title": paper_record.metadata.title,
+                    "paper_id": paper_record.paper_id,
+                }
+            )
         except Exception as e:
-            failed.append({"file": pdf_path.name, "error": str(e)})
+            failed.append(
+                {
+                    "file": paper_record.file_path.name,
+                    "paper_id": paper_record.paper_id,
+                    "error": str(e),
+                }
+            )
 
     if all_docs:
         VectorStoreIndex.from_documents(
@@ -163,6 +394,7 @@ def index_collection(collection_id: int, collection_name: str) -> dict:
 
     return {
         "indexed": len(loaded),
+        "papers": len(paper_records),
         "files": loaded,
         "failed": failed,
     }
@@ -174,7 +406,7 @@ def get_query_engine(collection_id: int):
         chroma_collection = chroma_client.get_collection(chroma_name)
     except Exception:
         return None
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+    vector_store = SafeChromaVectorStore(chroma_collection=chroma_collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
     index = VectorStoreIndex.from_vector_store(
         vector_store, storage_context=storage_context
@@ -248,10 +480,16 @@ def chat_endpoint(req: ChatRequest):
             seen = set()
             for node in response.source_nodes:
                 fname = node.metadata.get("source_file", "Unknown")
-                if fname not in seen:
-                    seen.add(fname)
+                page_number = node.metadata.get("page_number")
+                dedupe_key = (fname, page_number)
+                if dedupe_key not in seen:
+                    seen.add(dedupe_key)
                     sources.append({
                         "file": fname,
+                        "title": node.metadata.get("title"),
+                        "year": node.metadata.get("year") if node.metadata.get("year") != -1 else None,
+                        "page_number": page_number if page_number != -1 else None,
+                        "journal_venue": node.metadata.get("journal_venue") or None,
                         "score": round(node.score, 3) if node.score else None,
                         "snippet": node.text[:200] + "..." if len(node.text) > 200 else node.text
                     })

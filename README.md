@@ -114,7 +114,7 @@ Open `index.html` directly in your browser — no separate frontend server neede
 ## Usage
 
 1. **Pick a collection** from the sidebar
-2. **Click "Index Collection"** — reads all PDFs in that Zotero folder, chunks them, and stores embeddings locally in ChromaDB. Only needs to run once per collection (or after adding new papers)
+2. **Click "Index Collection"** — reads all PDFs in that Zotero folder, attaches Zotero paper metadata to every chunk, and stores embeddings locally in ChromaDB. Only needs to run once per collection (or after adding new papers)
 3. **Chat** — ask anything across all papers in the collection. Sources with relevance scores appear under each response
 
 ### Example questions
@@ -131,5 +131,6 @@ Open `index.html` directly in your browser — no separate frontend server neede
 
 - Chat history is kept in-memory per session for follow-up questions
 - Embeddings are persisted in `chroma_db/` — re-indexing overwrites the existing index for that collection
+- Indexed chunks now carry Zotero metadata including title, authors, year, venue, abstract, tags, paper key, attachment key, collection id, and page number
 - The Zotero database is opened read-only, but avoid having Zotero running during a large indexing job to prevent lock conflicts
 - PDFs stored in Zotero's linked-file mode may need path adjustments in `main.py`

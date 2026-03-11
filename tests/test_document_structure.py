@@ -21,6 +21,7 @@ STRUCTURE_FIXTURES = [
     "page_break_merge",
     "front_matter_filter",
     "figure_table_guardrails",
+    "equation_boilerplate_guardrails",
     "psm_real_excerpt",
     "tarsier_real_excerpt",
     "treegpt_real_excerpt",

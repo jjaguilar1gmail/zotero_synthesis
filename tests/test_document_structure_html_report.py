@@ -33,6 +33,7 @@ def test_render_document_structure_html_contains_sections_and_rejections():
     assert "HTML Smoke Paper" in html
     assert "Detected Headings" in html
     assert "Rejected Candidates" in html
+    assert "Parse Messages" in html
     assert "Figure 1: Example chart" in html
 
 
@@ -50,6 +51,7 @@ def test_render_batch_index_html_links_report_files():
                     "chunk_count": 5,
                     "max_heading_level": 1,
                     "max_chunks_in_section": 3,
+                    "parse_messages": [],
                     "tags": ["inline-abstract"],
                 },
                 {
@@ -60,6 +62,7 @@ def test_render_batch_index_html_links_report_files():
                     "chunk_count": 9,
                     "max_heading_level": 2,
                     "max_chunks_in_section": 4,
+                    "parse_messages": [],
                     "tags": ["inline-abstract", "subsections"],
                 },
                 {
@@ -70,6 +73,7 @@ def test_render_batch_index_html_links_report_files():
                     "chunk_count": 25,
                     "max_heading_level": 4,
                     "max_chunks_in_section": 9,
+                    "parse_messages": ["invalid pdf header: b'--Urf'"],
                     "tags": ["repeated-section-labels", "rejected-heading-candidates"],
                 }
             ],
@@ -84,6 +88,8 @@ def test_render_batch_index_html_links_report_files():
     assert "reports/noisy.html" in html
     assert "high rejected count (8)" in html
     assert "deep heading nesting (level 4)" in html
+    assert "parse warnings (1)" in html
+    assert "Parse Msgs" in html
     assert ">6<" in html
     assert ">39<" in html
     assert "67%" in html

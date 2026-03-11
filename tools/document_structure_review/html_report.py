@@ -230,6 +230,8 @@ def render_document_structure_html(paper_record, report, pages, summary: Optiona
 
     tags = summary.get("tags", [])
     tag_html = "".join(f"<span class=\"tag\">{escape(tag)}</span>" for tag in tags) or "<span class=\"muted\">No tags</span>"
+    parse_messages = summary.get("parse_messages", [])
+    parse_message_html = "".join(f"<li class=\"card\">{escape(message)}</li>" for message in parse_messages)
 
     headings_html = "".join(
         f"<li class=\"card\"><strong>{escape(heading.heading_title)}</strong><div class=\"muted\">page {escape(str(heading.page_number))} | level {heading.level} | {escape(heading.detection_reason)}</div><div>{escape(heading.raw_line)}</div></li>"
@@ -259,6 +261,10 @@ def render_document_structure_html(paper_record, report, pages, summary: Optiona
       <h2>Summary</h2>
       <div class=\"summary-grid\">{''.join(summary_items)}</div>
       <div style=\"margin-top: 12px\"><span class=\"label\">Tags</span><div class=\"tag-list\">{tag_html}</div></div>
+    </section>
+    <section class=\"panel\">
+      <h2>Parse Messages</h2>
+      <ul class=\"clean\">{parse_message_html or '<li class="card muted">No parse messages.</li>'}</ul>
     </section>
     <section class=\"panel two-col\">
       <div>
@@ -292,6 +298,7 @@ def _outlier_signals(summary: dict) -> list[str]:
     max_heading_level = summary.get("max_heading_level", 0)
     max_chunks_in_section = summary.get("max_chunks_in_section", 0)
     tags = set(summary.get("tags", []))
+    parse_messages = summary.get("parse_messages", [])
     signals = []
 
     if headings == 0:
@@ -314,6 +321,8 @@ def _outlier_signals(summary: dict) -> list[str]:
         signals.append("repeated section labels")
     if "rejected-heading-candidates" in tags and rejected > 0:
         signals.append("rejected heading candidates present")
+    if parse_messages:
+      signals.append(f"parse warnings ({len(parse_messages)})")
 
     return signals
 
@@ -326,6 +335,7 @@ def _outlier_score(summary: dict) -> int:
     max_heading_level = summary.get("max_heading_level", 0)
     max_chunks_in_section = summary.get("max_chunks_in_section", 0)
     tags = set(summary.get("tags", []))
+    parse_messages = summary.get("parse_messages", [])
 
     if headings == 0:
         score += 4
@@ -347,6 +357,8 @@ def _outlier_score(summary: dict) -> int:
         score += 2
     if "rejected-heading-candidates" in tags:
         score += 1
+    if parse_messages:
+      score += 3
 
     return score
 
@@ -365,8 +377,9 @@ def render_batch_index_html(corpus_summary: dict) -> str:
     rows = []
     for summary in summaries:
         html_name = f"{Path(summary['file']).stem}.html"
+        parse_message_count = len(summary.get("parse_messages", []))
         rows.append(
-            f"<tr><td><a href=\"reports/{escape(html_name)}\">{escape(summary['file'])}</a></td><td>{summary['sections']}</td><td>{summary['headings']}</td><td>{summary['rejected_candidates']}</td><td>{escape(', '.join(summary.get('tags', [])))}</td></tr>"
+            f"<tr><td><a href=\"reports/{escape(html_name)}\">{escape(summary['file'])}</a></td><td>{summary['sections']}</td><td>{summary['headings']}</td><td>{summary['rejected_candidates']}</td><td>{parse_message_count}</td><td>{escape(', '.join(summary.get('tags', [])))}</td></tr>"
         )
 
     tag_rows = []
@@ -397,8 +410,9 @@ def render_batch_index_html(corpus_summary: dict) -> str:
     for score, _, summary, signals in ranked_outliers[:5]:
         html_name = f"{Path(summary['file']).stem}.html"
         signal_html = "".join(f"<span class=\"tag\">{escape(signal)}</span>" for signal in signals)
+        parse_message_count = len(summary.get("parse_messages", []))
         outlier_items.append(
-            f"<li class=\"card\"><strong><a href=\"reports/{escape(html_name)}\">{escape(summary['file'])}</a></strong><div class=\"muted\">outlier score {score} | sections {summary.get('sections', 0)} | headings {summary.get('headings', 0)} | rejected {summary.get('rejected_candidates', 0)}</div><div class=\"tag-list\">{signal_html}</div></li>"
+            f"<li class=\"card\"><strong><a href=\"reports/{escape(html_name)}\">{escape(summary['file'])}</a></strong><div class=\"muted\">outlier score {score} | sections {summary.get('sections', 0)} | headings {summary.get('headings', 0)} | rejected {summary.get('rejected_candidates', 0)} | parse messages {parse_message_count}</div><div class=\"tag-list\">{signal_html}</div></li>"
         )
 
     outlier_panel = (
@@ -437,7 +451,7 @@ def render_batch_index_html(corpus_summary: dict) -> str:
     <section class=\"panel\">
       <h2>Per-Paper Review</h2>
       <table class=\"table\">
-        <thead><tr><th>Paper</th><th>Sections</th><th>Headings</th><th>Rejected</th><th>Tags</th></tr></thead>
+        <thead><tr><th>Paper</th><th>Sections</th><th>Headings</th><th>Rejected</th><th>Parse Msgs</th><th>Tags</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
     </section>

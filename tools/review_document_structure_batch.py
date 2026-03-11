@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import io
 import json
 import sys
 from pathlib import Path
@@ -54,12 +56,31 @@ def summarize_report(pdf_path: Path, report) -> dict:
     }
 
 
-def write_report_bundle(pdf_path: Path, output_dir: Path, paper_record, pages, report) -> dict:
+def load_pdf_with_messages(pdf_path: Path):
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+        paper_record, pages = load_pdf(pdf_path, title=None, abstract=None)
+
+    raw_messages = [
+        line.strip()
+        for line in (stdout_buffer.getvalue() + "\n" + stderr_buffer.getvalue()).splitlines()
+        if line.strip()
+    ]
+    unique_messages = []
+    for message in raw_messages:
+        if message not in unique_messages:
+            unique_messages.append(message)
+    return paper_record, pages, unique_messages
+
+
+def write_report_bundle(pdf_path: Path, output_dir: Path, paper_record, pages, report, parse_messages: list[str] | None = None) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = pdf_path.stem
     report_path = output_dir / f"{stem}.json"
     html_path = output_dir / f"{stem}.html"
     summary = summarize_report(pdf_path, report)
+    summary["parse_messages"] = parse_messages or []
     payload = {
         "summary": summary,
         "report": report.model_dump(),
@@ -106,9 +127,9 @@ def main() -> None:
     summaries = []
     reports_dir = args.output_dir / "reports"
     for pdf_path in pdf_paths:
-        paper_record, pages = load_pdf(pdf_path, title=None, abstract=None)
+        paper_record, pages, parse_messages = load_pdf_with_messages(pdf_path)
         report = analyze_document_structure(paper_record, pages)
-        summaries.append(write_report_bundle(pdf_path, reports_dir, paper_record, pages, report))
+        summaries.append(write_report_bundle(pdf_path, reports_dir, paper_record, pages, report, parse_messages=parse_messages))
 
     corpus_summary = {
         "input_dir": str(args.input_dir),

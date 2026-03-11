@@ -85,6 +85,10 @@ DIAGRAM_LABEL_WORDS = {
     "generate",
 }
 
+RUNNING_HEADER_LINES = {
+    "article in press",
+}
+
 NUMBERED_HEADING_RE = re.compile(
     r"^(?P<prefix>(?:\d+(?:\.\d+)*|[IVXLCDM]+|[A-Z]))[.)]?\s+(?P<title>.+)$",
     re.IGNORECASE,
@@ -275,6 +279,11 @@ def looks_like_front_matter_metadata_line(line: str) -> bool:
     return False
 
 
+def looks_like_running_header_or_boilerplate(line: str) -> bool:
+    normalized = normalize_section_heading(line)
+    return normalized in RUNNING_HEADER_LINES
+
+
 def looks_like_figure_or_table_heading(line: str) -> bool:
     stripped = line.strip()
     lower = stripped.lower()
@@ -286,6 +295,48 @@ def looks_like_figure_or_table_heading(line: str) -> bool:
     if normalized_words and len(normalized_words) <= 3 and all(word in DIAGRAM_LABEL_WORDS for word in normalized_words):
         return True
     if digit_ratio(stripped) > 0.35 and alpha_ratio(stripped) < 0.5:
+        return True
+    return False
+
+
+def symbol_ratio(text: str) -> float:
+    stripped = "".join(char for char in text if not char.isspace())
+    if not stripped:
+        return 0.0
+    symbol_chars = [char for char in stripped if not char.isalnum()]
+    return len(symbol_chars) / len(stripped)
+
+
+def looks_like_equation_heading(line: str) -> bool:
+    stripped = line.strip()
+    normalized = normalize_section_heading(stripped)
+    tokens = re.findall(r"[A-Za-z0-9°~^_'/+\-]+", stripped)
+    words = stripped.split()
+    if not stripped:
+        return False
+    if re.match(r"^[\[(]?\d+(?:\.\d+)+[\])]?$", stripped):
+        return True
+    if stripped[0] in {"=", "+", "*", "/", "~", "\\"}:
+        return True
+    if stripped.endswith(")") and re.search(r"\(\d+(?:\.\d+)+\)$", stripped):
+        return True
+    if "=" in stripped and alpha_ratio(stripped) < 0.7:
+        return True
+    if any(token in stripped for token in ("--+", "->", "/", "\\", "`", "(", ")")) and symbol_ratio(stripped) > 0.22 and len(words) <= 10:
+        return True
+    if symbol_ratio(stripped) > 0.18 and alpha_ratio(stripped) < 0.72:
+        return True
+    if digit_ratio(stripped) > 0.28 and alpha_ratio(stripped) < 0.72:
+        return True
+    if len(tokens) >= 4:
+        short_token_ratio = sum(len(token) <= 3 for token in tokens) / len(tokens)
+        vowel_token_ratio = sum(bool(re.search(r"[aeiouAEIOU]", token)) for token in tokens) / len(tokens)
+        uppercase_token_ratio = sum(any(char.isupper() for char in token) for token in tokens) / len(tokens)
+        if short_token_ratio >= 0.75 and vowel_token_ratio <= 0.35:
+            return True
+        if short_token_ratio >= 0.75 and uppercase_token_ratio >= 0.6:
+            return True
+    if normalized and len(normalized.split()) <= 3 and alpha_ratio(stripped) < 0.55:
         return True
     return False
 
@@ -369,6 +420,7 @@ def detect_section_heading(
             or len(title.split()) > 14
             or (canonical_label is None and title and title[0].islower())
             or looks_like_figure_or_table_heading(title)
+            or looks_like_equation_heading(title)
         ):
             return None, RejectedHeadingCandidate(
                 page_number=page_number,
@@ -389,6 +441,13 @@ def detect_section_heading(
         ), None
 
     if is_short_heading_candidate(stripped):
+        if looks_like_equation_heading(stripped):
+            return None, RejectedHeadingCandidate(
+                page_number=page_number,
+                line_index=line_index,
+                raw_line=stripped,
+                reason="equation-like-line",
+            )
         heading_title = clean_heading_title(stripped)
         return HeadingMatch(
             page_number=page_number,
@@ -497,6 +556,28 @@ def analyze_document_structure(
                         line_index=line_index,
                         raw_line=line,
                         reason="figure-table-label",
+                    )
+                )
+                continue
+
+            if looks_like_running_header_or_boilerplate(line):
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="running-header-boilerplate",
+                    )
+                )
+                continue
+
+            if looks_like_equation_heading(line):
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="equation-like-line",
                     )
                 )
                 continue

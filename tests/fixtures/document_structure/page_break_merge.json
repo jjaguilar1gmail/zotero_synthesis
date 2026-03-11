@@ -1,0 +1,41 @@
+{
+  "paper": {
+    "paper_id": "fixture-page-break",
+    "title": "Fixture Page Break Paper",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "1 Introduction\nIntroductory material is provided here.\n2 Methods\nThe methods section starts on the first page and"
+    },
+    {
+      "page_number": 2,
+      "text": "continues on the second page without a repeated heading.\nIt still belongs to the same section.\n3 Results\nThe evaluation is summarized here."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Introduction",
+      "Methods",
+      "Results"
+    ],
+    "labels": [
+      "Introduction",
+      "Methods",
+      "Results"
+    ],
+    "levels": [1, 1, 1],
+    "paths": [
+      ["Introduction"],
+      ["Methods"],
+      ["Results"]
+    ],
+    "page_spans": [
+      [1, 1],
+      [1, 2],
+      [2, 2]
+    ]
+  }
+}

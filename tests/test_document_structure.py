@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from ingestion.document_structure import (
     PaperMetadata,
     PaperRecord,
@@ -10,6 +12,14 @@ from ingestion.document_structure import (
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "document_structure"
+
+STRUCTURE_FIXTURES = [
+    "numbered_subsections",
+    "false_positive_guardrails",
+    "roman_numeral_headings",
+    "uppercase_headings",
+    "page_break_merge",
+]
 
 
 def load_fixture(name: str) -> dict:
@@ -35,8 +45,9 @@ def make_paper_record(fixture: dict) -> tuple[PaperRecord, list[tuple[int, str]]
     return record, pages
 
 
-def test_numbered_headings_and_subsections_are_detected():
-    fixture = load_fixture("numbered_subsections")
+@pytest.mark.parametrize("fixture_name", STRUCTURE_FIXTURES)
+def test_structure_fixtures_match_expected_output(fixture_name: str):
+    fixture = load_fixture(fixture_name)
     paper_record, pages = make_paper_record(fixture)
     report = analyze_document_structure(paper_record, pages)
 
@@ -45,19 +56,15 @@ def test_numbered_headings_and_subsections_are_detected():
     assert [section.level for section in report.sections] == fixture["expected"]["levels"]
     assert [section.path for section in report.sections] == fixture["expected"]["paths"]
 
+    if "page_spans" in fixture["expected"]:
+        assert [
+            [section.page_start, section.page_end] for section in report.sections
+        ] == fixture["expected"]["page_spans"]
 
-def test_inline_body_phrases_are_not_promoted_to_headings():
-    fixture = load_fixture("false_positive_guardrails")
-    paper_record, pages = make_paper_record(fixture)
-    report = analyze_document_structure(paper_record, pages)
-
-    assert [heading.heading_title for heading in report.headings] == fixture["expected"]["headings"]
-    assert [section.label for section in report.sections] == fixture["expected"]["labels"]
-    assert [section.level for section in report.sections] == fixture["expected"]["levels"]
-    assert [section.path for section in report.sections] == fixture["expected"]["paths"]
-
-    rejected_lines = [candidate.raw_line for candidate in report.rejected_candidates]
-    assert fixture["expected"]["rejected_contains"][0] in rejected_lines
+    if "rejected_contains" in fixture["expected"]:
+        rejected_lines = [candidate.raw_line for candidate in report.rejected_candidates]
+        for expected_line in fixture["expected"]["rejected_contains"]:
+            assert expected_line in rejected_lines
 
 
 def test_passage_chunks_are_created_from_detected_sections():

@@ -1,0 +1,38 @@
+{
+  "paper": {
+    "paper_id": "fixture-roman",
+    "title": "Fixture Roman Numeral Paper",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "I. Introduction\nThis section opens the paper.\nII. Related Work\nPrior work is summarized here.\nIII. Methods\nThe proposed system is described in this section.\nIV. Results\nWe report the main findings.\nV. Conclusion\nWe conclude the study here."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Introduction",
+      "Related Work",
+      "Methods",
+      "Results",
+      "Conclusion"
+    ],
+    "labels": [
+      "Introduction",
+      "Related Work",
+      "Methods",
+      "Results",
+      "Conclusion"
+    ],
+    "levels": [1, 1, 1, 1, 1],
+    "paths": [
+      ["Introduction"],
+      ["Related Work"],
+      ["Methods"],
+      ["Results"],
+      ["Conclusion"]
+    ]
+  }
+}

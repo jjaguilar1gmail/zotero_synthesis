@@ -4,6 +4,8 @@ import json
 import logging
 import re
 import traceback
+from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 from dotenv import load_dotenv
@@ -17,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.schema import TextNode
+from llama_index.core.schema import NodeWithScore, TextNode
 from llama_index.core.vector_stores.types import VectorStoreQuery, VectorStoreQueryResult
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.vector_stores.chroma.base import _to_chroma_filter
@@ -66,6 +68,73 @@ chroma_client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 # ── In-memory chat history per collection ────────────────────────────────────
 chat_histories: dict[str, list[dict]] = {}
 
+CORE_RETRIEVAL_SECTION_HINTS = {
+    "Abstract": {"abstract"},
+    "Introduction": {"introduction", "overview", "motivation"},
+    "Background": {"background"},
+    "Related Work": {"related work", "prior work", "literature review"},
+    "Methods": {"method", "methods", "methodology", "approach", "implementation", "experimental setup"},
+    "Results": {"result", "results", "evaluation", "experiment", "experiments", "findings"},
+    "Discussion": {"discussion", "analysis", "interpretation"},
+    "Conclusion": {"conclusion", "conclusions", "future work", "summary"},
+}
+
+END_MATTER_LABELS = {
+    "references",
+    "acknowledgements",
+    "acknowledgments",
+    "author contributions",
+    "competing interests",
+    "data availability",
+}
+
+QUERY_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i", "in",
+    "into", "is", "it", "me", "of", "on", "or", "our", "paper", "papers", "show", "summarize",
+    "tell", "that", "the", "their", "them", "these", "this", "to", "using", "what", "which", "with",
+    "would", "you",
+}
+
+COMPARATIVE_QUERY_MARKERS = {
+    "across", "compare", "comparison", "contrast", "contradiction", "differences", "different", "similarities", "versus", "vs",
+}
+
+
+@dataclass
+class RetrievalPlan:
+    query_text: str
+    section_labels: list[str] = field(default_factory=list)
+    year_from: Optional[int] = None
+    year_to: Optional[int] = None
+    comparative: bool = False
+    dense_top_k: int = 14
+    target_papers: int = 3
+    per_paper_limit: int = 2
+    max_evidence_chunks: int = 6
+
+
+@dataclass
+class EvidenceChunk:
+    node: NodeWithScore
+    dense_score: float
+    rerank_score: float
+    paper_id: str
+    title: str
+    year: Optional[int]
+    section_label: Optional[str]
+    section_heading: Optional[str]
+    source_id: str = ""
+
+
+@dataclass
+class RetrievalResult:
+    plan: RetrievalPlan
+    dense_candidates: list[NodeWithScore]
+    filtered_candidates: list[NodeWithScore]
+    reranked_candidates: list[EvidenceChunk]
+    selected_chunks: list[EvidenceChunk]
+
+
 
 class SafeChromaVectorStore(ChromaVectorStore):
     def query(self, query: VectorStoreQuery, **kwargs: Any) -> VectorStoreQueryResult:
@@ -88,6 +157,269 @@ class SafeChromaVectorStore(ChromaVectorStore):
             where=where,
             **kwargs,
         )
+
+
+def normalize_text(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def tokenize_query_terms(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9][a-z0-9-]{2,}", text.lower())
+        if token not in QUERY_STOPWORDS
+    }
+
+
+def infer_section_filters(query_text: str) -> list[str]:
+    lowered = query_text.lower()
+    section_labels: list[str] = []
+    for label, hints in CORE_RETRIEVAL_SECTION_HINTS.items():
+        if any(hint in lowered for hint in hints):
+            section_labels.append(label)
+    return section_labels
+
+
+def infer_year_filters(query_text: str) -> tuple[Optional[int], Optional[int]]:
+    lowered = query_text.lower()
+
+    between_match = re.search(r"between\s+((?:19|20)\d{2})\s+and\s+((?:19|20)\d{2})", lowered)
+    if between_match:
+        return int(between_match.group(1)), int(between_match.group(2))
+
+    range_match = re.search(r"from\s+((?:19|20)\d{2})\s+to\s+((?:19|20)\d{2})", lowered)
+    if range_match:
+        return int(range_match.group(1)), int(range_match.group(2))
+
+    since_match = re.search(r"(?:since|after)\s+((?:19|20)\d{2})", lowered)
+    if since_match:
+        return int(since_match.group(1)), None
+
+    before_match = re.search(r"(?:before|until|up to)\s+((?:19|20)\d{2})", lowered)
+    if before_match:
+        return None, int(before_match.group(1))
+
+    return None, None
+
+
+def infer_retrieval_plan(query_text: str) -> RetrievalPlan:
+    comparative = any(marker in query_text.lower() for marker in COMPARATIVE_QUERY_MARKERS)
+    section_labels = infer_section_filters(query_text)
+    year_from, year_to = infer_year_filters(query_text)
+    return RetrievalPlan(
+        query_text=query_text,
+        section_labels=section_labels,
+        year_from=year_from,
+        year_to=year_to,
+        comparative=comparative,
+        dense_top_k=20 if comparative else 14,
+        target_papers=4 if comparative else 3,
+        per_paper_limit=2 if comparative else 2,
+        max_evidence_chunks=8 if comparative else 6,
+    )
+
+
+def metadata_matches_plan(metadata: dict, plan: RetrievalPlan) -> bool:
+    year = metadata.get("year")
+    if isinstance(year, str) and year.isdigit():
+        year = int(year)
+    if year == -1:
+        year = None
+
+    if plan.year_from is not None and (year is None or year < plan.year_from):
+        return False
+    if plan.year_to is not None and (year is None or year > plan.year_to):
+        return False
+
+    if plan.section_labels:
+        section_label = normalize_text(metadata.get("section_label")).lower()
+        section_heading = normalize_text(metadata.get("section_heading")).lower()
+        section_path = normalize_text(metadata.get("section_path")).lower()
+        if not any(
+            label.lower() == section_label
+            or label.lower() in section_heading
+            or label.lower() in section_path
+            for label in plan.section_labels
+        ):
+            return False
+
+    return True
+
+
+def get_collection_index(collection_id: int) -> Optional[VectorStoreIndex]:
+    chroma_name = collection_chroma_name(collection_id)
+    try:
+        chroma_collection = chroma_client.get_collection(chroma_name)
+    except Exception:
+        return None
+
+    vector_store = SafeChromaVectorStore(chroma_collection=chroma_collection)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    return VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_context)
+
+
+def lexical_overlap_score(query_terms: set[str], text: str) -> float:
+    if not query_terms:
+        return 0.0
+    text_terms = tokenize_query_terms(text)
+    if not text_terms:
+        return 0.0
+    return len(query_terms & text_terms) / len(query_terms)
+
+
+def rerank_evidence_candidates(query_text: str, plan: RetrievalPlan, candidates: list[NodeWithScore]) -> list[EvidenceChunk]:
+    query_terms = tokenize_query_terms(query_text)
+    reranked: list[EvidenceChunk] = []
+
+    for candidate in candidates:
+        metadata = candidate.node.metadata or {}
+        title = normalize_text(metadata.get("title"))
+        section_label = normalize_text(metadata.get("section_label")) or None
+        section_heading = normalize_text(metadata.get("section_heading")) or None
+        section_path = normalize_text(metadata.get("section_path"))
+        paper_id = normalize_text(metadata.get("paper_node_id") or metadata.get("parent_paper_id") or title or candidate.node.node_id)
+        dense_score = float(candidate.score or 0.0)
+
+        overlap = lexical_overlap_score(query_terms, f"{title} {section_heading or ''} {section_path} {candidate.text[:800]}")
+        title_overlap = lexical_overlap_score(query_terms, title)
+        section_overlap = lexical_overlap_score(query_terms, f"{section_label or ''} {section_heading or ''}")
+
+        score = dense_score
+        score += overlap * 0.35
+        score += title_overlap * 0.15
+        score += section_overlap * 0.1
+
+        if plan.section_labels and section_label and section_label in plan.section_labels:
+            score += 0.12
+        if section_label and section_label.lower() in END_MATTER_LABELS:
+            score -= 0.2
+
+        reranked.append(
+            EvidenceChunk(
+                node=candidate,
+                dense_score=dense_score,
+                rerank_score=score,
+                paper_id=paper_id,
+                title=title,
+                year=metadata.get("year") if metadata.get("year") != -1 else None,
+                section_label=section_label,
+                section_heading=section_heading,
+            )
+        )
+
+    reranked.sort(key=lambda item: item.rerank_score, reverse=True)
+    return reranked
+
+
+def select_evidence_chunks(plan: RetrievalPlan, reranked_candidates: list[EvidenceChunk]) -> list[EvidenceChunk]:
+    grouped: dict[str, list[EvidenceChunk]] = defaultdict(list)
+    for candidate in reranked_candidates:
+        grouped[candidate.paper_id].append(candidate)
+
+    ranked_papers = sorted(
+        grouped.items(),
+        key=lambda item: max(candidate.rerank_score for candidate in item[1]),
+        reverse=True,
+    )
+
+    selected: list[EvidenceChunk] = []
+    for _, paper_candidates in ranked_papers[: plan.target_papers]:
+        selected.extend(paper_candidates[: plan.per_paper_limit])
+
+    selected.sort(key=lambda item: item.rerank_score, reverse=True)
+    selected = selected[: plan.max_evidence_chunks]
+
+    for index, candidate in enumerate(selected, start=1):
+        candidate.source_id = f"S{index}"
+
+    return selected
+
+
+def run_retrieval_pipeline(index: VectorStoreIndex, query_text: str) -> RetrievalResult:
+    plan = infer_retrieval_plan(query_text)
+    retriever = index.as_retriever(similarity_top_k=plan.dense_top_k)
+    dense_candidates = list(retriever.retrieve(query_text))
+
+    filtered_candidates = [candidate for candidate in dense_candidates if metadata_matches_plan(candidate.node.metadata or {}, plan)]
+    if not filtered_candidates:
+        filtered_candidates = dense_candidates
+
+    reranked_candidates = rerank_evidence_candidates(query_text, plan, filtered_candidates)
+    selected_chunks = select_evidence_chunks(plan, reranked_candidates)
+    return RetrievalResult(
+        plan=plan,
+        dense_candidates=dense_candidates,
+        filtered_candidates=filtered_candidates,
+        reranked_candidates=reranked_candidates,
+        selected_chunks=selected_chunks,
+    )
+
+
+def build_answer_prompt(question: str, history_text: str, retrieval: RetrievalResult) -> str:
+    evidence_lines = []
+    for chunk in retrieval.selected_chunks:
+        metadata = chunk.node.node.metadata or {}
+        page_number = metadata.get("page_number")
+        page_text = f"p.{page_number}" if page_number not in (None, -1) else "page unknown"
+        heading = chunk.section_heading or chunk.section_label or "Unlabeled section"
+        evidence_lines.append(
+            f"[{chunk.source_id}] {chunk.title} ({chunk.year or 'year unknown'}) | {heading} | {page_text}\n"
+            f"Excerpt: {chunk.node.text[:700].strip()}"
+        )
+
+    plan_notes = []
+    if retrieval.plan.section_labels:
+        plan_notes.append(f"section focus={', '.join(retrieval.plan.section_labels)}")
+    if retrieval.plan.year_from or retrieval.plan.year_to:
+        plan_notes.append(
+            f"year range={retrieval.plan.year_from or 'any'}..{retrieval.plan.year_to or 'any'}"
+        )
+
+    history_block = f"Conversation so far:\n{history_text}\n\n" if history_text else ""
+    retrieval_block = "\n".join(evidence_lines) if evidence_lines else "No evidence retrieved."
+    plan_block = f"Retrieval notes: {'; '.join(plan_notes)}\n\n" if plan_notes else ""
+
+    return (
+        "You are answering questions over a Zotero paper collection. Use only the provided evidence. "
+        "Synthesize across papers when useful, prefer concrete claims, and say when the evidence is insufficient. "
+        "Cite evidence inline using source ids like [S1] or [S2].\n\n"
+        f"{history_block}"
+        f"{plan_block}"
+        f"Question: {question}\n\n"
+        f"Evidence:\n{retrieval_block}\n\n"
+        "Answer:"
+    )
+
+
+def synthesize_answer(question: str, history_text: str, retrieval: RetrievalResult) -> str:
+    prompt = build_answer_prompt(question, history_text, retrieval)
+    response = Settings.llm.complete(prompt)
+    return getattr(response, "text", str(response)).strip()
+
+
+def format_sources_from_evidence(chunks: list[EvidenceChunk]) -> list[dict]:
+    sources = []
+    for chunk in chunks:
+        metadata = chunk.node.node.metadata or {}
+        page_number = metadata.get("page_number")
+        sources.append(
+            {
+                "source_id": chunk.source_id,
+                "file": metadata.get("source_file", "Unknown"),
+                "title": metadata.get("title"),
+                "year": metadata.get("year") if metadata.get("year") != -1 else None,
+                "page_number": page_number if page_number != -1 else None,
+                "section_label": metadata.get("section_label") or None,
+                "section_heading": metadata.get("section_heading") or None,
+                "journal_venue": metadata.get("journal_venue") or None,
+                "score": round(chunk.rerank_score, 3),
+                "dense_score": round(chunk.dense_score, 3),
+                "snippet": chunk.node.text[:240] + "..." if len(chunk.node.text) > 240 else chunk.node.text,
+            }
+        )
+    return sources
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Zotero helpers
@@ -400,20 +732,6 @@ def index_collection(collection_id: int, collection_name: str) -> dict:
     }
 
 
-def get_query_engine(collection_id: int):
-    chroma_name = collection_chroma_name(collection_id)
-    try:
-        chroma_collection = chroma_client.get_collection(chroma_name)
-    except Exception:
-        return None
-    vector_store = SafeChromaVectorStore(chroma_collection=chroma_collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-    index = VectorStoreIndex.from_vector_store(
-        vector_store, storage_context=storage_context
-    )
-    return index.as_query_engine(similarity_top_k=6, response_mode="tree_summarize")
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Routes
 # ─────────────────────────────────────────────────────────────────────────────
@@ -452,8 +770,8 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/chat")
 def chat_endpoint(req: ChatRequest):
-    engine = get_query_engine(req.collection_id)
-    if engine is None:
+    index = get_collection_index(req.collection_id)
+    if index is None:
         raise HTTPException(
             status_code=400,
             detail="Collection not indexed yet. Please index it first."
@@ -466,40 +784,28 @@ def chat_endpoint(req: ChatRequest):
             role = "User" if turn["role"] == "user" else "Assistant"
             history_text += f"{role}: {turn['content']}\n"
 
-    prompt = req.message
-    if history_text:
-        prompt = (
-            f"Conversation so far:\n{history_text}\n"
-            f"Now answer this follow-up: {req.message}"
-        )
-
     try:
-        response = engine.query(prompt)
-        sources = []
-        if hasattr(response, "source_nodes"):
-            seen = set()
-            for node in response.source_nodes:
-                fname = node.metadata.get("source_file", "Unknown")
-                page_number = node.metadata.get("page_number")
-                dedupe_key = (fname, page_number)
-                if dedupe_key not in seen:
-                    seen.add(dedupe_key)
-                    sources.append({
-                        "file": fname,
-                        "title": node.metadata.get("title"),
-                        "year": node.metadata.get("year") if node.metadata.get("year") != -1 else None,
-                        "page_number": page_number if page_number != -1 else None,
-                        "section_label": node.metadata.get("section_label") or None,
-                        "section_heading": node.metadata.get("section_heading") or None,
-                        "journal_venue": node.metadata.get("journal_venue") or None,
-                        "score": round(node.score, 3) if node.score else None,
-                        "snippet": node.text[:200] + "..." if len(node.text) > 200 else node.text
-                    })
+        retrieval = run_retrieval_pipeline(index, req.message)
+        response_text = synthesize_answer(req.message, history_text, retrieval)
+        sources = format_sources_from_evidence(retrieval.selected_chunks)
         return {
-            "response": str(response),
+            "response": response_text,
             "sources": sources,
+            "retrieval": {
+                "metadata_filters": {
+                    "section_labels": retrieval.plan.section_labels,
+                    "year_from": retrieval.plan.year_from,
+                    "year_to": retrieval.plan.year_to,
+                },
+                "comparative": retrieval.plan.comparative,
+                "dense_candidates": len(retrieval.dense_candidates),
+                "filtered_candidates": len(retrieval.filtered_candidates),
+                "evidence_chunks": len(retrieval.selected_chunks),
+                "papers_considered": len({chunk.paper_id for chunk in retrieval.selected_chunks}),
+            },
         }
     except Exception as e:
+        logger.error("chat_endpoint error:\n%s", traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 

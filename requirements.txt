@@ -9,3 +9,4 @@ llama-index-llms-openai-like>=0.2.0,<0.3.0
 llama-index-readers-file==0.2.2
 chromadb==0.5.23
 pydantic==2.9.2
+pytest==8.3.3

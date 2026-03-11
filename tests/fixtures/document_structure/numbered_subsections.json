@@ -1,0 +1,48 @@
+{
+  "paper": {
+    "paper_id": "fixture-numbered",
+    "title": "Fixture Numbered Paper",
+    "abstract": "A synthetic paper fixture used for parser testing.",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "Abstract This paper introduces a clean fixture for section parsing.\n1 Introduction\nThis is the introduction text.\n1.1 Contributions\nWe summarize the main contributions here.\n2 Methods\nThis section explains the methodology.\n2.1 Data Collection\nWe describe the dataset assembly process."
+    },
+    {
+      "page_number": 2,
+      "text": "3 Results\nThe evaluation results are described here.\n4 Conclusion\nThis is the conclusion section."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Abstract",
+      "Introduction",
+      "Contributions",
+      "Methods",
+      "Data Collection",
+      "Results",
+      "Conclusion"
+    ],
+    "labels": [
+      "Abstract",
+      "Introduction",
+      "Introduction",
+      "Methods",
+      "Methods",
+      "Results",
+      "Conclusion"
+    ],
+    "levels": [1, 1, 2, 1, 2, 1, 1],
+    "paths": [
+      ["Abstract"],
+      ["Introduction"],
+      ["Introduction", "Contributions"],
+      ["Methods"],
+      ["Methods", "Data Collection"],
+      ["Results"],
+      ["Conclusion"]
+    ]
+  }
+}

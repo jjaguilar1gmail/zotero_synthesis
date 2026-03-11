@@ -135,3 +135,23 @@ Open `index.html` directly in your browser — no separate frontend server neede
 - Ingestion now chunks papers by detected sections such as Abstract, Introduction, Methods, Results, Discussion, and Conclusion before creating passage-level retrieval chunks
 - The Zotero database is opened read-only, but avoid having Zotero running during a large indexing job to prevent lock conflicts
 - PDFs stored in Zotero's linked-file mode may need path adjustments in `main.py`
+
+## Development
+
+Run parser tests:
+
+```bash
+pytest -q
+```
+
+Inspect how the section parser splits a committed fixture:
+
+```bash
+python tools/debug_document_structure.py --fixture tests/fixtures/document_structure/numbered_subsections.json
+```
+
+Inspect a real PDF and optionally write a JSON report for diffing:
+
+```bash
+python tools/debug_document_structure.py --file path/to/paper.pdf --title "Paper Title" --json-out debug_output/paper-report.json
+```

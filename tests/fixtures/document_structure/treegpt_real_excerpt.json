@@ -1,0 +1,42 @@
+{
+  "paper": {
+    "paper_id": "fixture-treegpt-real-excerpt",
+    "title": "Tree-GPT Real Excerpt",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "ABSTRACT:\nThis paper introduces a novel framework, Tree-GPT, which incorporates Large Language Models (LLMs) into the forestry remote sensing data workflow, thereby enhancing the efficiency of data analysis.\n1. INTRODUCTION\nAnalysis of forest remote sensing data is essential for various applications in forestry and environmental sciences."
+    },
+    {
+      "page_number": 2,
+      "text": "2. RELATED WORKS\n2.1 Individual Tree Crown (ITC) Segmentation\nCurrent research has explored various methods based on point clouds or images for ITC segmentation."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "ABSTRACT",
+      "INTRODUCTION",
+      "RELATED WORKS",
+      "Individual Tree Crown (ITC) Segmentation"
+    ],
+    "labels": [
+      "Abstract",
+      "Introduction",
+      "Related Work"
+    ],
+    "levels": [1, 1, 2],
+    "paths": [
+      ["ABSTRACT"],
+      ["INTRODUCTION"],
+      ["RELATED WORKS", "Individual Tree Crown (ITC) Segmentation"]
+    ],
+    "page_spans": [
+      [1, 1],
+      [1, 1],
+      [2, 2]
+    ]
+  }
+}

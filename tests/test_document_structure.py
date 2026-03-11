@@ -21,6 +21,9 @@ STRUCTURE_FIXTURES = [
     "page_break_merge",
     "psm_real_excerpt",
     "tarsier_real_excerpt",
+    "treegpt_real_excerpt",
+    "nonholonomic_real_excerpt",
+    "piv_real_excerpt",
 ]
 
 

@@ -1,0 +1,53 @@
+{
+  "paper": {
+    "paper_id": "fixture-piv-real-excerpt",
+    "title": "PIV Real Excerpt",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 135,
+      "text": "Abstract An integrated cross-correlation/relaxation algorithm for particle tracking velocimetry is presented. The aim of this integration is to provide a flexible methodology able to analyze images with different seeding and flow conditions.\n1 Introduction\nLately, velocity measurements based on image analysis have become a standard for experimental research in fluid mechanics."
+    },
+    {
+      "page_number": 136,
+      "text": "2 Algorithms\nTo understand the algorithms used here and their integration, some definitions are necessary.\n2.1 The cross-correlation-based algorithm for PTV\nIn this algorithm, the velocity associated with a particle is found by using the highest cross-correlation coefficient obtained after comparing a reference intensity matrix in the first frame and a set of sub-matrices at the second one."
+    },
+    {
+      "page_number": 146,
+      "text": "6 Conclusions\nA two-step PTV algorithm, denoted ICCRM, that combines the well-known cross-correlation (CC) and RM has been presented. In general, the ICCRM has a better performance, in terms of number of matched particles than CC and RM alone."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Abstract",
+      "Introduction",
+      "Algorithms",
+      "The cross-correlation-based algorithm for PTV",
+      "Conclusions"
+    ],
+    "labels": [
+      "Abstract",
+      "Introduction",
+      "Algorithms",
+      "Algorithms",
+      "Conclusion"
+    ],
+    "levels": [1, 1, 1, 2, 1],
+    "paths": [
+      ["Abstract"],
+      ["Introduction"],
+      ["Algorithms"],
+      ["Algorithms", "The cross-correlation-based algorithm for PTV"],
+      ["Conclusions"]
+    ],
+    "page_spans": [
+      [135, 135],
+      [135, 135],
+      [136, 136],
+      [136, 136],
+      [146, 146]
+    ]
+  }
+}

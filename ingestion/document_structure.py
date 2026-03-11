@@ -170,6 +170,13 @@ def split_heading_prefix(line: str) -> tuple[int, str, bool]:
     return level, title, True
 
 
+def clean_heading_title(title: str) -> str:
+    cleaned = title.strip()
+    cleaned = re.sub(r"\s*\.{2,}\s*\d+\s*$", "", cleaned)
+    cleaned = re.sub(r"\s*\.{2,}\s*$", "", cleaned)
+    return cleaned.strip(" :-")
+
+
 def is_short_heading_candidate(line: str) -> bool:
     words = line.split()
     if not words or len(words) > 12 or len(line) > 90:
@@ -201,7 +208,7 @@ def detect_section_heading(
                     page_number=page_number,
                     line_index=line_index,
                     raw_line=stripped,
-                    heading_title=numbered_title.strip(" :-"),
+                    heading_title=clean_heading_title(numbered_title),
                     canonical_label=label,
                     level=numbered_level if has_numbering else 1,
                     detection_reason="alias-exact",
@@ -238,7 +245,7 @@ def detect_section_heading(
                 reason="numbered-line-rejected",
             )
 
-        heading_title = title.strip(" :-")
+        heading_title = clean_heading_title(title)
         return HeadingMatch(
             page_number=page_number,
             line_index=line_index,
@@ -250,7 +257,7 @@ def detect_section_heading(
         ), None
 
     if is_short_heading_candidate(stripped):
-        heading_title = stripped.strip(" :-")
+        heading_title = clean_heading_title(stripped)
         return HeadingMatch(
             page_number=page_number,
             line_index=line_index,

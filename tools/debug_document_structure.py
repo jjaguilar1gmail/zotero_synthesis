@@ -16,6 +16,7 @@ from ingestion.document_structure import (
     create_passage_chunks,
     parse_page_number,
 )
+from tools.document_structure_review.html_report import render_document_structure_html
 
 
 def load_fixture(path: Path) -> tuple[PaperRecord, list[tuple[int | None, str]]]:
@@ -93,6 +94,7 @@ def main() -> None:
     parser.add_argument("--title", help="Optional paper title override for PDF mode.")
     parser.add_argument("--abstract", help="Optional abstract override for PDF mode.")
     parser.add_argument("--json-out", type=Path, help="Write the full parse report as JSON.")
+    parser.add_argument("--html-out", type=Path, help="Write a static HTML review report.")
     args = parser.parse_args()
 
     if bool(args.fixture) == bool(args.file):
@@ -109,6 +111,11 @@ def main() -> None:
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+    if args.html_out:
+        args.html_out.parent.mkdir(parents=True, exist_ok=True)
+        html = render_document_structure_html(paper_record, report, pages)
+        args.html_out.write_text(html, encoding="utf-8")
 
 
 if __name__ == "__main__":

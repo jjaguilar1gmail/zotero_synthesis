@@ -9,6 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from tools.debug_document_structure import load_pdf
 from ingestion.document_structure import analyze_document_structure, create_passage_chunks
+from tools.document_structure_review.html_report import render_batch_index_html, render_document_structure_html
 
 
 def infer_structure_tags(report) -> list[str]:
@@ -53,16 +54,21 @@ def summarize_report(pdf_path: Path, report) -> dict:
     }
 
 
-def write_report_bundle(pdf_path: Path, output_dir: Path, report) -> dict:
+def write_report_bundle(pdf_path: Path, output_dir: Path, paper_record, pages, report) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = pdf_path.stem
     report_path = output_dir / f"{stem}.json"
+    html_path = output_dir / f"{stem}.html"
     summary = summarize_report(pdf_path, report)
     payload = {
         "summary": summary,
         "report": report.model_dump(),
     }
     report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    html_path.write_text(
+        render_document_structure_html(paper_record, report, pages, summary=summary),
+        encoding="utf-8",
+    )
     return summary
 
 
@@ -102,7 +108,7 @@ def main() -> None:
     for pdf_path in pdf_paths:
         paper_record, pages = load_pdf(pdf_path, title=None, abstract=None)
         report = analyze_document_structure(paper_record, pages)
-        summaries.append(write_report_bundle(pdf_path, reports_dir, report))
+        summaries.append(write_report_bundle(pdf_path, reports_dir, paper_record, pages, report))
 
     corpus_summary = {
         "input_dir": str(args.input_dir),
@@ -114,9 +120,14 @@ def main() -> None:
     (args.output_dir / "summary.json").write_text(
         json.dumps(corpus_summary, indent=2), encoding="utf-8"
     )
+    (args.output_dir / "index.html").write_text(
+        render_batch_index_html(corpus_summary),
+        encoding="utf-8",
+    )
 
     print(f"Reviewed {len(summaries)} PDFs")
     print(f"Summary: {args.output_dir / 'summary.json'}")
+    print(f"HTML Index: {args.output_dir / 'index.html'}")
     print(f"Reports: {reports_dir}")
 
 

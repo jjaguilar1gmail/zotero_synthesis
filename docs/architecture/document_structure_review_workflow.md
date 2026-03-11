@@ -89,6 +89,7 @@ Inspect a single paper or fixture:
 ```bash
 python tools/debug_document_structure.py --file path/to/paper.pdf
 python tools/debug_document_structure.py --fixture tests/fixtures/document_structure/numbered_subsections.json
+python tools/debug_document_structure.py --fixture tests/fixtures/document_structure/numbered_subsections.json --html-out debug_output/fixture-report.html
 ```
 
 Batch-review a local corpus:
@@ -106,7 +107,9 @@ python tools/select_document_structure_candidates.py --max-per-collection 3 --re
 This writes:
 
 - `debug_output/document_structure_review/summary.json`
+- `debug_output/document_structure_review/index.html`
 - `debug_output/document_structure_review/reports/*.json`
+- `debug_output/document_structure_review/reports/*.html`
 
 ## Promotion Workflow
 

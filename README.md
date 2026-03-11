@@ -156,11 +156,19 @@ Inspect a real PDF and optionally write a JSON report for diffing:
 python tools/debug_document_structure.py --file path/to/paper.pdf --title "Paper Title" --json-out debug_output/paper-report.json
 ```
 
+Write a static HTML review report for a single paper or fixture:
+
+```bash
+python tools/debug_document_structure.py --fixture tests/fixtures/document_structure/numbered_subsections.json --html-out debug_output/fixture-report.html
+```
+
 Batch-review a local PDF corpus and generate per-paper reports plus a summary:
 
 ```bash
 python tools/review_document_structure_batch.py --input-dir path/to/pdf/corpus --recursive
 ```
+
+That batch review now also writes an HTML index and one HTML report per paper.
 
 Generate a structurally diverse recommendation shortlist directly from your Zotero library:
 

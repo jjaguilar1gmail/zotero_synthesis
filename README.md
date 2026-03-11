@@ -162,4 +162,10 @@ Batch-review a local PDF corpus and generate per-paper reports plus a summary:
 python tools/review_document_structure_batch.py --input-dir path/to/pdf/corpus --recursive
 ```
 
+Generate a structurally diverse recommendation shortlist directly from your Zotero library:
+
+```bash
+python tools/select_document_structure_candidates.py --max-per-collection 3 --recommendation-count 10
+```
+
 See [docs/architecture/document_structure_review_workflow.md](docs/architecture/document_structure_review_workflow.md) for the gold-fixture versus local-review workflow.

@@ -97,6 +97,12 @@ Batch-review a local corpus:
 python tools/review_document_structure_batch.py --input-dir path/to/pdf/corpus --recursive
 ```
 
+Select a structurally diverse recommendation set directly from the Zotero library:
+
+```bash
+python tools/select_document_structure_candidates.py --max-per-collection 3 --recommendation-count 10
+```
+
 This writes:
 
 - `debug_output/document_structure_review/summary.json`
@@ -110,6 +116,12 @@ This writes:
 4. Pick the highest-value failures.
 5. Convert those papers into minimal committed text fixtures.
 6. Add exact expectations to the parser tests.
+
+Alternative starting point:
+
+1. Run the Zotero candidate selector.
+2. Review the recommended papers and their tags.
+3. Use those papers as the first promotion shortlist.
 
 ## Heuristic Tags In Batch Review
 

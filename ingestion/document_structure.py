@@ -18,7 +18,7 @@ SECTION_ALIASES = {
     "Abstract": ["abstract"],
     "Introduction": ["introduction"],
     "Background": ["background"],
-    "Related Work": ["related work", "literature review", "prior work"],
+    "Related Work": ["related work", "related works", "literature review", "prior work"],
     "Methods": [
         "method",
         "methods",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from html import escape
 from pathlib import Path
 from typing import Optional
@@ -285,24 +285,157 @@ def render_document_structure_html(paper_record, report, pages, summary: Optiona
     return _html_document(paper_record.metadata.title, body)
 
 
+def _outlier_signals(summary: dict) -> list[str]:
+    headings = summary.get("headings", 0)
+    sections = summary.get("sections", 0)
+    rejected = summary.get("rejected_candidates", 0)
+    max_heading_level = summary.get("max_heading_level", 0)
+    max_chunks_in_section = summary.get("max_chunks_in_section", 0)
+    tags = set(summary.get("tags", []))
+    signals = []
+
+    if headings == 0:
+        signals.append("no headings detected")
+    if sections == 0:
+        signals.append("no sections built")
+    if rejected >= 5:
+        signals.append(f"high rejected count ({rejected})")
+    elif headings and rejected / max(headings, 1) >= 0.5:
+        signals.append(f"high rejected ratio ({rejected}/{headings})")
+    if headings >= 18:
+        signals.append(f"dense heading count ({headings})")
+    if sections >= 20:
+        signals.append(f"dense section count ({sections})")
+    if max_heading_level >= 4:
+        signals.append(f"deep heading nesting (level {max_heading_level})")
+    if max_chunks_in_section >= 8:
+        signals.append(f"large section chunk fanout ({max_chunks_in_section})")
+    if "repeated-section-labels" in tags:
+        signals.append("repeated section labels")
+    if "rejected-heading-candidates" in tags and rejected > 0:
+        signals.append("rejected heading candidates present")
+
+    return signals
+
+
+def _outlier_score(summary: dict) -> int:
+    score = 0
+    headings = summary.get("headings", 0)
+    sections = summary.get("sections", 0)
+    rejected = summary.get("rejected_candidates", 0)
+    max_heading_level = summary.get("max_heading_level", 0)
+    max_chunks_in_section = summary.get("max_chunks_in_section", 0)
+    tags = set(summary.get("tags", []))
+
+    if headings == 0:
+        score += 4
+    if sections == 0:
+        score += 4
+    if headings >= 18:
+        score += 2
+    if sections >= 20:
+        score += 2
+    if rejected >= 5:
+        score += 4
+    elif headings and rejected / max(headings, 1) >= 0.5:
+        score += 3
+    if max_heading_level >= 4:
+        score += 2
+    if max_chunks_in_section >= 8:
+        score += 2
+    if "repeated-section-labels" in tags:
+        score += 2
+    if "rejected-heading-candidates" in tags:
+        score += 1
+
+    return score
+
+
 def render_batch_index_html(corpus_summary: dict) -> str:
+    summaries = corpus_summary.get("summaries", [])
+    pdf_count = corpus_summary.get("pdf_count", len(summaries))
+    total_sections = sum(summary.get("sections", 0) for summary in summaries)
+    total_headings = sum(summary.get("headings", 0) for summary in summaries)
+    total_rejected = sum(summary.get("rejected_candidates", 0) for summary in summaries)
+    total_chunks = sum(summary.get("chunk_count", 0) for summary in summaries)
+    avg_sections = f"{(total_sections / pdf_count):.1f}" if pdf_count else "0.0"
+    avg_headings = f"{(total_headings / pdf_count):.1f}" if pdf_count else "0.0"
+    tag_counts = Counter(tag for summary in summaries for tag in summary.get("tags", []))
+
     rows = []
-    for summary in corpus_summary.get("summaries", []):
+    for summary in summaries:
         html_name = f"{Path(summary['file']).stem}.html"
         rows.append(
             f"<tr><td><a href=\"reports/{escape(html_name)}\">{escape(summary['file'])}</a></td><td>{summary['sections']}</td><td>{summary['headings']}</td><td>{summary['rejected_candidates']}</td><td>{escape(', '.join(summary.get('tags', [])))}</td></tr>"
         )
+
+    tag_rows = []
+    for tag, count in sorted(tag_counts.items(), key=lambda item: (-item[1], item[0])):
+        tag_rows.append(
+            f"<tr><td>{escape(tag)}</td><td>{count}</td><td>{count / pdf_count:.0%}</td></tr>"
+        )
+
+    tag_panel = (
+        f"<table class=\"table\"><thead><tr><th>Tag</th><th>Papers</th><th>Coverage</th></tr></thead><tbody>{''.join(tag_rows)}</tbody></table>"
+        if tag_rows
+        else "<p class=\"muted\">No structure tags were inferred for this corpus.</p>"
+    )
+
+    outlier_items = []
+    ranked_outliers = []
+    for summary in summaries:
+        signals = _outlier_signals(summary)
+        if signals:
+            ranked_outliers.append((
+                _outlier_score(summary),
+                summary.get("file", "unknown"),
+                summary,
+                signals,
+            ))
+
+    ranked_outliers.sort(key=lambda item: (-item[0], item[1]))
+    for score, _, summary, signals in ranked_outliers[:5]:
+        html_name = f"{Path(summary['file']).stem}.html"
+        signal_html = "".join(f"<span class=\"tag\">{escape(signal)}</span>" for signal in signals)
+        outlier_items.append(
+            f"<li class=\"card\"><strong><a href=\"reports/{escape(html_name)}\">{escape(summary['file'])}</a></strong><div class=\"muted\">outlier score {score} | sections {summary.get('sections', 0)} | headings {summary.get('headings', 0)} | rejected {summary.get('rejected_candidates', 0)}</div><div class=\"tag-list\">{signal_html}</div></li>"
+        )
+
+    outlier_panel = (
+        f"<ul class=\"clean\">{''.join(outlier_items)}</ul>"
+        if outlier_items
+        else "<p class=\"muted\">No obvious outliers detected in this corpus.</p>"
+    )
 
     body = f"""
     <section class=\"panel\">
       <h1>Document Structure Review</h1>
       <div class=\"meta\">
         <div class=\"meta-item\"><span class=\"label\">Input Dir</span><span class=\"value\">{escape(corpus_summary.get('input_dir', ''))}</span></div>
-        <div class=\"meta-item\"><span class=\"label\">PDF Count</span><span class=\"value\">{escape(str(corpus_summary.get('pdf_count', 0)))}</span></div>
+        <div class=\"meta-item\"><span class=\"label\">PDF Count</span><span class=\"value\">{escape(str(pdf_count))}</span></div>
       </div>
     </section>
     <section class=\"panel\">
       <h2>Corpus Summary</h2>
+      <div class=\"summary-grid\">
+        <div class=\"summary-item\"><span class=\"label\">Total Sections</span><span class=\"value\">{total_sections}</span></div>
+        <div class=\"summary-item\"><span class=\"label\">Total Headings</span><span class=\"value\">{total_headings}</span></div>
+        <div class=\"summary-item\"><span class=\"label\">Total Rejected</span><span class=\"value\">{total_rejected}</span></div>
+        <div class=\"summary-item\"><span class=\"label\">Total Chunks</span><span class=\"value\">{total_chunks}</span></div>
+        <div class=\"summary-item\"><span class=\"label\">Avg Sections / Paper</span><span class=\"value\">{avg_sections}</span></div>
+        <div class=\"summary-item\"><span class=\"label\">Avg Headings / Paper</span><span class=\"value\">{avg_headings}</span></div>
+      </div>
+    </section>
+    <section class=\"panel\">
+      <h2>Tag Breakdown</h2>
+      {tag_panel}
+    </section>
+    <section class=\"panel\">
+      <h2>Outlier Papers</h2>
+      {outlier_panel}
+    </section>
+    <section class=\"panel\">
+      <h2>Per-Paper Review</h2>
       <table class=\"table\">
         <thead><tr><th>Paper</th><th>Sections</th><th>Headings</th><th>Rejected</th><th>Tags</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>

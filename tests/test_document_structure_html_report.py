@@ -40,14 +40,37 @@ def test_render_batch_index_html_links_report_files():
     html = render_batch_index_html(
         {
             "input_dir": "sample-dir",
-            "pdf_count": 1,
+            "pdf_count": 3,
             "summaries": [
                 {
                     "file": "sample.pdf",
                     "sections": 2,
                     "headings": 3,
                     "rejected_candidates": 1,
+                    "chunk_count": 5,
+                    "max_heading_level": 1,
+                    "max_chunks_in_section": 3,
                     "tags": ["inline-abstract"],
+                },
+                {
+                    "file": "other.pdf",
+                    "sections": 4,
+                    "headings": 6,
+                    "rejected_candidates": 2,
+                    "chunk_count": 9,
+                    "max_heading_level": 2,
+                    "max_chunks_in_section": 4,
+                    "tags": ["inline-abstract", "subsections"],
+                },
+                {
+                    "file": "noisy.pdf",
+                    "sections": 22,
+                    "headings": 20,
+                    "rejected_candidates": 8,
+                    "chunk_count": 25,
+                    "max_heading_level": 4,
+                    "max_chunks_in_section": 9,
+                    "tags": ["repeated-section-labels", "rejected-heading-candidates"],
                 }
             ],
         }
@@ -55,3 +78,12 @@ def test_render_batch_index_html_links_report_files():
 
     assert "reports/sample.html" in html
     assert "inline-abstract" in html
+    assert "Tag Breakdown" in html
+    assert "Total Sections" in html
+    assert "Outlier Papers" in html
+    assert "reports/noisy.html" in html
+    assert "high rejected count (8)" in html
+    assert "deep heading nesting (level 4)" in html
+    assert ">6<" in html
+    assert ">39<" in html
+    assert "67%" in html

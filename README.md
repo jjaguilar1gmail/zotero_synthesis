@@ -155,3 +155,11 @@ Inspect a real PDF and optionally write a JSON report for diffing:
 ```bash
 python tools/debug_document_structure.py --file path/to/paper.pdf --title "Paper Title" --json-out debug_output/paper-report.json
 ```
+
+Batch-review a local PDF corpus and generate per-paper reports plus a summary:
+
+```bash
+python tools/review_document_structure_batch.py --input-dir path/to/pdf/corpus --recursive
+```
+
+See [docs/architecture/document_structure_review_workflow.md](docs/architecture/document_structure_review_workflow.md) for the gold-fixture versus local-review workflow.

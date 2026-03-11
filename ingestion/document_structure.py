@@ -58,11 +58,29 @@ CORE_SECTION_LABELS = {
 
 ALLOWED_NON_CANONICAL_SHORT_HEADINGS = {
     "references",
+    "bibliography",
     "acknowledgements",
     "acknowledgments",
     "examples",
     "appendix",
     "appendices",
+}
+
+REFERENCE_SECTION_HEADINGS = {
+    "references",
+    "bibliography",
+}
+
+END_MATTER_CONTEXT_HEADINGS = {
+    "references",
+    "bibliography",
+    "conclusion",
+    "conclusions",
+    "acknowledgements",
+    "acknowledgments",
+    "author contributions",
+    "competing interests",
+    "data availability",
 }
 
 DIAGRAM_LABEL_WORDS = {
@@ -87,6 +105,28 @@ DIAGRAM_LABEL_WORDS = {
 
 RUNNING_HEADER_LINES = {
     "article in press",
+}
+
+METADATA_HEADING_LINES = {
+    "edited by",
+    "reviewed by",
+    "corresponding author",
+    "corresponding authors",
+}
+
+MONTH_NAMES = {
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
 }
 
 NUMBERED_HEADING_RE = re.compile(
@@ -279,9 +319,149 @@ def looks_like_front_matter_metadata_line(line: str) -> bool:
     return False
 
 
+def looks_like_publication_banner(line: str) -> bool:
+    stripped = line.strip()
+    lower = stripped.lower()
+    if not stripped:
+        return False
+    if re.search(r"\b\d+\(\d+\)\b", stripped) and re.search(r"\b(?:journal|conference|proceedings)\b", lower):
+        return True
+    if re.search(r"\b(?:journal|conference|proceedings|volume|vol\.|issue|issn|isbn|copyright)\b", lower):
+        return True
+    if any(month in lower for month in MONTH_NAMES) and re.search(r"\b(?:19|20)\d{2}\b", lower) and stripped.count(",") >= 2:
+        return True
+    if re.search(r"\b(?:melbourne|australia|usa|u\.s\.a\.|united states)\b", lower) and re.search(r"\b(?:19|20)\d{2}\b", lower):
+        return True
+    return False
+
+
 def looks_like_running_header_or_boilerplate(line: str) -> bool:
     normalized = normalize_section_heading(line)
     return normalized in RUNNING_HEADER_LINES
+
+
+def looks_like_person_name_heading(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if re.match(r"^[A-Z]\.[A-Z](?:\.)?\s+[A-Z][a-z'`-]+$", stripped):
+        return True
+    if re.match(r"^[A-Z][a-z'`-]+(?:\s+[A-Z]\.){1,2}\s+[A-Z][a-z'`-]+$", stripped):
+        return True
+    return False
+
+
+def is_brief_headingish_line(line: Optional[str]) -> bool:
+    if not line:
+        return False
+    stripped = line.strip()
+    words = stripped.split()
+    if not stripped or len(words) > 6 or len(stripped) > 56:
+        return False
+    if stripped.endswith((".", ",", ";", ":")):
+        return False
+    return alpha_ratio(stripped) >= 0.7 and digit_ratio(stripped) <= 0.35
+
+
+def looks_like_visual_label_heading(
+    line: str,
+    previous_line: Optional[str] = None,
+    next_line: Optional[str] = None,
+) -> bool:
+    stripped = line.strip()
+    normalized = normalize_section_heading(stripped)
+    words = stripped.split()
+    if not stripped:
+        return False
+    if any(symbol in stripped for symbol in ("…", "↑", "↓", "→", "←", "✓", "✗")):
+        return True
+    if stripped.startswith(("#", "@")):
+        return True
+    if looks_like_person_name_heading(stripped):
+        return True
+    if normalized in METADATA_HEADING_LINES:
+        return True
+    if len(words) <= 5 and any(char in stripped for char in ("(", ")")) and normalized not in ALLOWED_NON_CANONICAL_SHORT_HEADINGS:
+        return True
+    if normalized in {"tool call", "input", "output"}:
+        return True
+    neighboring_labels = sum(
+        1
+        for neighbor in (previous_line, next_line)
+        if is_brief_headingish_line(neighbor)
+    )
+    if neighboring_labels >= 1 and is_brief_headingish_line(stripped) and normalized not in ALLOWED_NON_CANONICAL_SHORT_HEADINGS:
+        return True
+    return False
+
+
+def is_reference_section_heading(normalized_heading: str) -> bool:
+    return normalized_heading in REFERENCE_SECTION_HEADINGS
+
+
+def is_end_matter_context(normalized_heading: str) -> bool:
+    return normalized_heading in END_MATTER_CONTEXT_HEADINGS
+
+
+def looks_like_affiliation_or_address_line(line: str) -> bool:
+    stripped = line.strip()
+    lower = stripped.lower()
+    words = stripped.split()
+    if not stripped:
+        return False
+    _, title, has_numbering = split_heading_prefix(stripped)
+    normalized_title = normalize_section_heading(title if has_numbering else stripped)
+    if has_numbering and (find_canonical_section_label(normalized_title) or is_allowed_short_heading(normalized_title)):
+        return False
+    if re.search(r"\b(?:california|maryland|michigan|massachusetts|new york|texas|illinois|england|france|germany|canada)\b", lower) and re.search(r"\b\d{5}(?:-\d{4})?\b", stripped):
+        return True
+    if re.match(r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+,?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+\d{5}(?:-\d{4})?$", stripped):
+        return True
+    if "," in stripped and stripped.upper() == stripped and len(words) >= 3:
+        return True
+    if re.match(r"^[A-Z][A-Z.'-]+(?:\s+[A-Z][A-Z.'-]+){1,5}$", stripped) and any("." in word for word in words):
+        return True
+    if any(token in lower for token in ("university", "institute", "department", "laboratory", "school of")):
+        return True
+    return False
+
+
+def looks_like_reference_entry(line: str) -> bool:
+    stripped = line.strip()
+    lower = stripped.lower()
+    if not stripped:
+        return False
+    if re.match(r"^\[\d+\]", stripped):
+        return True
+    if lower.startswith("[online]. available:") or "available: http" in lower or "arxiv.org/abs/" in lower:
+        return True
+    if re.match(r"^[A-Z][A-Za-z'`-]+,\s+(?:[A-Z]\.|and\s+[A-Z]\.)", stripped):
+        return True
+    if any(marker in stripped for marker in ("“", "\"", " et al.", " et al,")) and "," in stripped:
+        return True
+    if re.search(r"\b(?:19|20)\d{2}\b", stripped) and "," in stripped and len(stripped.split()) >= 4:
+        return True
+    return False
+
+
+def looks_like_table_banner_or_header(line: str) -> bool:
+    stripped = line.strip()
+    normalized = normalize_section_heading(stripped)
+    words = stripped.split()
+    if not stripped:
+        return False
+    if any(symbol in stripped for symbol in ("↑", "↓", "→", "←")):
+        return True
+    if " / " in stripped and len(words) <= 6:
+        return True
+    if "@" in stripped and any(char.isdigit() for char in stripped):
+        return True
+    if stripped.upper() == stripped:
+        if any(token in stripped for token in (",", "(", ")", "%")):
+            return True
+        if len(stripped) >= 32 and normalized not in ALLOWED_NON_CANONICAL_SHORT_HEADINGS:
+            return True
+    return False
 
 
 def looks_like_figure_or_table_heading(line: str) -> bool:
@@ -341,6 +521,40 @@ def looks_like_equation_heading(line: str) -> bool:
     return False
 
 
+def looks_like_sentence_fragment_heading(title: str) -> bool:
+    stripped = title.strip()
+    lower = stripped.lower()
+    words = lower.split()
+    if not stripped:
+        return False
+    if any(lower.startswith(prefix) for prefix in (
+        "in summary",
+        "as ",
+        "while ",
+        "although ",
+        "to see",
+        "assuming that",
+        "one can",
+        "we can",
+        "we evaluate",
+        "the search employed",
+    )):
+        return True
+    if any(lower.startswith(prefix) for prefix in ("the ", "this ", "these ", "those ")):
+        if len(words) >= 8 or "," in stripped or stripped.endswith((" or", " and", " of", " for", " to", " with", " in", " by")):
+            return True
+    if re.search(r";\s*[A-Z][a-z]+ et al\.", stripped):
+        return True
+    if re.search(r"\b(?:19|20)\d{2}\b", stripped) and stripped.count(";") >= 1:
+        return True
+    if len(words) >= 7 and any(token in words for token in {"the", "and", "or", "while", "although", "because", "with", "for", "from", "into"}):
+        if "," in stripped or stripped.endswith((" or", " and", " of", " for", " to", " with", " in", " by")):
+            return True
+    if len(words) >= 9 and alpha_ratio(stripped) >= 0.75 and not stripped.isupper() and stripped != stripped.title():
+        return True
+    return False
+
+
 def is_allowed_short_heading(normalized_heading: str) -> bool:
     return normalized_heading in ALLOWED_NON_CANONICAL_SHORT_HEADINGS or normalized_heading in {
         alias
@@ -353,7 +567,7 @@ def is_short_heading_candidate(line: str) -> bool:
     words = line.split()
     if not words or len(words) > 12 or len(line) > 90:
         return False
-    if line.endswith((".", ";", ",")):
+    if line.endswith((".", ";", ",", ":")):
         return False
     normalized = normalize_section_heading(line)
     if len(words) < 2 and not is_allowed_short_heading(normalized):
@@ -367,6 +581,10 @@ def detect_section_heading(
     line: str,
     page_number: Optional[int] = None,
     line_index: int = 0,
+    inside_reference_section: bool = False,
+    inside_end_matter: bool = False,
+    previous_line: Optional[str] = None,
+    next_line: Optional[str] = None,
 ) -> tuple[Optional[HeadingMatch], Optional[RejectedHeadingCandidate]]:
     stripped = line.strip()
     if not stripped:
@@ -376,7 +594,47 @@ def detect_section_heading(
     if not normalized:
         return None, None
 
+    if inside_reference_section and not is_reference_section_heading(normalized):
+        if looks_like_reference_entry(stripped):
+            return None, RejectedHeadingCandidate(
+                page_number=page_number,
+                line_index=line_index,
+                raw_line=stripped,
+                reason="reference-entry",
+            )
+        if looks_like_affiliation_or_address_line(stripped):
+            return None, RejectedHeadingCandidate(
+                page_number=page_number,
+                line_index=line_index,
+                raw_line=stripped,
+                reason="affiliation-address-line",
+            )
+
+    if inside_end_matter and looks_like_affiliation_or_address_line(stripped):
+        return None, RejectedHeadingCandidate(
+            page_number=page_number,
+            line_index=line_index,
+            raw_line=stripped,
+            reason="end-matter-affiliation",
+        )
+
+    if looks_like_table_banner_or_header(stripped):
+        return None, RejectedHeadingCandidate(
+            page_number=page_number,
+            line_index=line_index,
+            raw_line=stripped,
+            reason="table-banner-header",
+        )
+
     numbered_level, numbered_title, has_numbering = split_heading_prefix(stripped)
+
+    if looks_like_publication_banner(stripped):
+        return None, RejectedHeadingCandidate(
+            page_number=page_number,
+            line_index=line_index,
+            raw_line=stripped,
+            reason="publication-banner",
+        )
 
     for label, aliases in SECTION_ALIASES.items():
         for alias in aliases:
@@ -414,6 +672,13 @@ def detect_section_heading(
     canonical_label = find_canonical_section_label(normalized_title)
 
     if has_numbering:
+        if inside_reference_section and canonical_label is None and not is_allowed_short_heading(normalized_title):
+            return None, RejectedHeadingCandidate(
+                page_number=page_number,
+                line_index=line_index,
+                raw_line=stripped,
+                reason="reference-entry",
+            )
         if (
             title.endswith((".", ";", ","))
             or len(title) > 120
@@ -421,6 +686,8 @@ def detect_section_heading(
             or (canonical_label is None and title and title[0].islower())
             or looks_like_figure_or_table_heading(title)
             or looks_like_equation_heading(title)
+            or looks_like_sentence_fragment_heading(title)
+            or looks_like_publication_banner(title)
         ):
             return None, RejectedHeadingCandidate(
                 page_number=page_number,
@@ -441,12 +708,33 @@ def detect_section_heading(
         ), None
 
     if is_short_heading_candidate(stripped):
+        if inside_reference_section and normalized not in ALLOWED_NON_CANONICAL_SHORT_HEADINGS:
+            return None, RejectedHeadingCandidate(
+                page_number=page_number,
+                line_index=line_index,
+                raw_line=stripped,
+                reason="reference-entry",
+            )
         if looks_like_equation_heading(stripped):
             return None, RejectedHeadingCandidate(
                 page_number=page_number,
                 line_index=line_index,
                 raw_line=stripped,
                 reason="equation-like-line",
+            )
+        if looks_like_visual_label_heading(stripped, previous_line=previous_line, next_line=next_line):
+            return None, RejectedHeadingCandidate(
+                page_number=page_number,
+                line_index=line_index,
+                raw_line=stripped,
+                reason="visual-label-cluster",
+            )
+        if looks_like_sentence_fragment_heading(stripped):
+            return None, RejectedHeadingCandidate(
+                page_number=page_number,
+                line_index=line_index,
+                raw_line=stripped,
+                reason="sentence-fragment-heading",
             )
         heading_title = clean_heading_title(stripped)
         return HeadingMatch(
@@ -526,6 +814,11 @@ def analyze_document_structure(
 
         page_lines = [line.strip() for line in normalized_page.splitlines() if line.strip()]
         for line_index, line in enumerate(page_lines):
+            previous_line = page_lines[line_index - 1] if line_index > 0 else None
+            next_line = page_lines[line_index + 1] if line_index + 1 < len(page_lines) else None
+            inside_reference_section = is_reference_section_heading(normalize_section_heading(current_heading)) or is_reference_section_heading(normalize_section_heading(current_label))
+            inside_end_matter = is_end_matter_context(normalize_section_heading(current_heading)) or is_end_matter_context(normalize_section_heading(current_label))
+
             if looks_like_table_of_contents_marker(line):
                 inside_table_of_contents = True
                 report.rejected_candidates.append(
@@ -571,6 +864,68 @@ def analyze_document_structure(
                 )
                 continue
 
+            if normalize_section_heading(line) in METADATA_HEADING_LINES:
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="metadata-heading",
+                    )
+                )
+                continue
+
+            if looks_like_publication_banner(line):
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="publication-banner",
+                    )
+                )
+                continue
+
+            if (not content_started or inside_reference_section) and looks_like_affiliation_or_address_line(line):
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="affiliation-address-line",
+                    )
+                )
+                if inside_reference_section:
+                    if page_number is not None and (not current_pages or current_pages[-1] != page_number):
+                        current_pages.append(page_number)
+                    current_lines.append(line)
+                continue
+
+            if inside_reference_section and looks_like_reference_entry(line):
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="reference-entry",
+                    )
+                )
+                if page_number is not None and (not current_pages or current_pages[-1] != page_number):
+                    current_pages.append(page_number)
+                current_lines.append(line)
+                continue
+
+            if looks_like_table_banner_or_header(line):
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="table-banner-header",
+                    )
+                )
+                continue
+
             if looks_like_equation_heading(line):
                 report.rejected_candidates.append(
                     RejectedHeadingCandidate(
@@ -582,7 +937,15 @@ def analyze_document_structure(
                 )
                 continue
 
-            detected_heading, rejected = detect_section_heading(line, page_number, line_index)
+            detected_heading, rejected = detect_section_heading(
+                line,
+                page_number,
+                line_index,
+                inside_reference_section=inside_reference_section,
+                inside_end_matter=inside_end_matter,
+                previous_line=previous_line,
+                next_line=next_line,
+            )
             if rejected:
                 report.rejected_candidates.append(rejected)
 

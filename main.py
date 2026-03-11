@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.schema import TextNode
 from llama_index.core.vector_stores.types import VectorStoreQuery, VectorStoreQueryResult
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.vector_stores.chroma.base import _to_chroma_filter
@@ -58,6 +59,44 @@ Settings.llm = OpenAILike(
 )
 Settings.node_parser = SentenceSplitter(chunk_size=256, chunk_overlap=32)
 
+PASSAGE_SPLITTER = SentenceSplitter(
+    chunk_size=700,
+    chunk_overlap=120,
+    include_metadata=False,
+    include_prev_next_rel=False,
+)
+
+SECTION_ALIASES = {
+    "Abstract": ["abstract"],
+    "Introduction": ["introduction"],
+    "Background": ["background"],
+    "Related Work": ["related work", "literature review", "prior work"],
+    "Methods": [
+        "method",
+        "methods",
+        "methodology",
+        "materials and methods",
+        "experimental setup",
+        "approach",
+        "implementation details",
+    ],
+    "Results": ["result", "results", "experiments", "evaluation", "findings"],
+    "Discussion": ["discussion", "analysis"],
+    "Conclusion": ["conclusion", "conclusions", "concluding remarks"],
+}
+
+SECTION_ORDER = {
+    "Abstract": 0,
+    "Introduction": 1,
+    "Background": 2,
+    "Related Work": 3,
+    "Methods": 4,
+    "Results": 5,
+    "Discussion": 6,
+    "Conclusion": 7,
+    "Body": 8,
+}
+
 # ── Chroma client (persistent) ────────────────────────────────────────────────
 chroma_client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 
@@ -85,8 +124,28 @@ class PaperRecord(BaseModel):
     file_path: Path
     metadata: PaperMetadata
     parsed_text: str = ""
+    sections: list["SectionRecord"] = Field(default_factory=list)
     chunks: list[str] = Field(default_factory=list)
     generated_summary: Optional[str] = None
+
+
+class PassageChunkRecord(BaseModel):
+    chunk_id: str
+    section_id: str
+    text: str
+    chunk_index: int
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+
+
+class SectionRecord(BaseModel):
+    section_id: str
+    label: str
+    order: int
+    text: str
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    chunks: list[PassageChunkRecord] = Field(default_factory=list)
 
 
 class SafeChromaVectorStore(ChromaVectorStore):
@@ -136,6 +195,186 @@ def parse_page_number(value: Optional[str | int]) -> Optional[int]:
         return value
     match = re.search(r"\d+", str(value))
     return int(match.group(0)) if match else None
+
+
+def normalize_page_text(text: str) -> str:
+    text = text.replace("\r", "\n")
+    text = re.sub(r"-\n(?=[a-z])", "", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def normalize_section_heading(line: str) -> str:
+    heading = line.strip().lower()
+    heading = re.sub(r"^[\divxlcdm]+(?:\.[\divxlcdm]+)*[.)]?\s+", "", heading)
+    heading = heading.replace("&", "and")
+    heading = re.sub(r"[^a-z0-9\s-]", "", heading)
+    heading = re.sub(r"\s+", " ", heading)
+    return heading.strip(" -")
+
+
+def detect_section_heading(line: str) -> tuple[Optional[str], str]:
+    stripped = line.strip()
+    if not stripped:
+        return None, ""
+
+    normalized = normalize_section_heading(stripped)
+    if not normalized:
+        return None, ""
+
+    for label, aliases in SECTION_ALIASES.items():
+        for alias in aliases:
+            if normalized == alias:
+                return label, ""
+
+            if label == "Abstract" and normalized.startswith(f"{alias} "):
+                original_match = re.match(
+                    rf"^(?:[\divxlcdm]+(?:\.[\divxlcdm]+)*[.)]?\s+)?{re.escape(alias)}(?:\s*[:.\-]\s+|\s+)(.+)$",
+                    stripped,
+                    re.IGNORECASE,
+                )
+                if original_match:
+                    return label, original_match.group(1).strip()
+
+    return None, ""
+
+
+def build_section_record(
+    paper_record: PaperRecord,
+    label: str,
+    section_index: int,
+    lines: list[str],
+    pages: list[int],
+) -> Optional[SectionRecord]:
+    text = "\n".join(line for line in lines if line).strip()
+    if not text:
+        return None
+
+    page_values = [page for page in pages if page is not None]
+    slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "body"
+    return SectionRecord(
+        section_id=f"{paper_record.paper_id}:section:{section_index}:{slug}",
+        label=label,
+        order=SECTION_ORDER.get(label, SECTION_ORDER["Body"]),
+        text=text,
+        page_start=min(page_values) if page_values else None,
+        page_end=max(page_values) if page_values else None,
+    )
+
+
+def extract_sections_from_pages(paper_record: PaperRecord, pages: list[tuple[Optional[int], str]]) -> list[SectionRecord]:
+    sections: list[SectionRecord] = []
+    current_label = "Abstract" if paper_record.metadata.abstract else "Body"
+    current_lines: list[str] = []
+    current_pages: list[int] = []
+
+    for page_number, page_text in pages:
+        normalized_page = normalize_page_text(page_text)
+        if not normalized_page:
+            continue
+
+        page_lines = [line.strip() for line in normalized_page.splitlines() if line.strip()]
+        for line in page_lines:
+            detected_label, inline_text = detect_section_heading(line)
+            if detected_label:
+                section = build_section_record(
+                    paper_record,
+                    current_label,
+                    len(sections),
+                    current_lines,
+                    current_pages,
+                )
+                if section:
+                    sections.append(section)
+
+                current_label = detected_label
+                current_lines = []
+                current_pages = [page_number] if page_number is not None else []
+                if inline_text:
+                    current_lines.append(inline_text)
+                continue
+
+            if page_number is not None and (not current_pages or current_pages[-1] != page_number):
+                current_pages.append(page_number)
+            current_lines.append(line)
+
+    final_section = build_section_record(
+        paper_record,
+        current_label,
+        len(sections),
+        current_lines,
+        current_pages,
+    )
+    if final_section:
+        sections.append(final_section)
+
+    if not sections and paper_record.parsed_text:
+        fallback = build_section_record(
+            paper_record,
+            "Body",
+            0,
+            paper_record.parsed_text.splitlines(),
+            [page for page, _ in pages if page is not None],
+        )
+        return [fallback] if fallback else []
+
+    merged_sections: list[SectionRecord] = []
+    for section in sections:
+        if merged_sections and merged_sections[-1].label == section.label:
+            merged_sections[-1].text = f"{merged_sections[-1].text}\n{section.text}".strip()
+            merged_sections[-1].page_end = section.page_end or merged_sections[-1].page_end
+            continue
+        merged_sections.append(section)
+
+    for index, section in enumerate(merged_sections):
+        slug = re.sub(r"[^a-z0-9]+", "-", section.label.lower()).strip("-") or "body"
+        section.section_id = f"{paper_record.paper_id}:section:{index}:{slug}"
+
+    return merged_sections
+
+
+def create_passage_chunks(paper_record: PaperRecord, section: SectionRecord) -> list[PassageChunkRecord]:
+    chunk_texts = [chunk.strip() for chunk in PASSAGE_SPLITTER.split_text(section.text) if chunk.strip()]
+    return [
+        PassageChunkRecord(
+            chunk_id=f"{section.section_id}:chunk:{chunk_index}",
+            section_id=section.section_id,
+            text=chunk_text,
+            chunk_index=chunk_index,
+            page_start=section.page_start,
+            page_end=section.page_end,
+        )
+        for chunk_index, chunk_text in enumerate(chunk_texts)
+    ]
+
+
+def build_passage_nodes(paper_record: PaperRecord, collection_name: str) -> list[TextNode]:
+    nodes: list[TextNode] = []
+    for section in paper_record.sections:
+        section.chunks = create_passage_chunks(paper_record, section)
+        for chunk in section.chunks:
+            metadata = build_chunk_metadata(paper_record, collection_name, chunk.page_start)
+            metadata.update(
+                {
+                    "section_label": section.label,
+                    "section_node_id": section.section_id,
+                    "section_order": section.order,
+                    "section_page_start": section.page_start if section.page_start is not None else -1,
+                    "section_page_end": section.page_end if section.page_end is not None else -1,
+                    "chunk_index": chunk.chunk_index,
+                    "chunk_id": chunk.chunk_id,
+                    "node_kind": "passage",
+                }
+            )
+            nodes.append(
+                TextNode(
+                    id_=chunk.chunk_id,
+                    text=chunk.text,
+                    metadata=metadata,
+                )
+            )
+    return nodes
 
 
 def format_creator_name(first_name: Optional[str], last_name: Optional[str], field_mode: int) -> str:
@@ -305,6 +544,7 @@ def build_chunk_metadata(
         "page_number": page_number if page_number is not None else -1,
         "section_label": paper_record.metadata.section_label,
         "parent_paper_id": paper_record.metadata.parent_paper_id,
+        "paper_node_id": paper_record.paper_id,
     }
 
 def get_zotero_collections() -> list[dict]:
@@ -350,30 +590,31 @@ def index_collection(collection_id: int, collection_name: str) -> dict:
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
     reader = PDFReader()
-    all_docs = []
+    all_nodes = []
     loaded = []
     failed = []
 
     for paper_record in paper_records:
         try:
             docs = reader.load_data(file=paper_record.file_path)
-            page_texts = []
+            page_entries: list[tuple[Optional[int], str]] = []
             for doc in docs:
-                page_texts.append(doc.text)
                 page_number = parse_page_number(
                     doc.metadata.get("page_label") or doc.metadata.get("page")
                 )
-                doc.metadata.update(
-                    build_chunk_metadata(paper_record, collection_name, page_number)
-                )
-            paper_record.parsed_text = "\n\n".join(page_texts)
-            paper_record.chunks = page_texts
-            all_docs.extend(docs)
+                page_entries.append((page_number, doc.text))
+            paper_record.parsed_text = "\n\n".join(text for _, text in page_entries if text)
+            paper_record.sections = extract_sections_from_pages(paper_record, page_entries)
+            passage_nodes = build_passage_nodes(paper_record, collection_name)
+            paper_record.chunks = [node.text for node in passage_nodes]
+            all_nodes.extend(passage_nodes)
             loaded.append(
                 {
                     "file": paper_record.file_path.name,
                     "title": paper_record.metadata.title,
                     "paper_id": paper_record.paper_id,
+                    "sections": len(paper_record.sections),
+                    "chunks": len(passage_nodes),
                 }
             )
         except Exception as e:
@@ -385,9 +626,9 @@ def index_collection(collection_id: int, collection_name: str) -> dict:
                 }
             )
 
-    if all_docs:
-        VectorStoreIndex.from_documents(
-            all_docs,
+    if all_nodes:
+        VectorStoreIndex(
+            nodes=all_nodes,
             storage_context=storage_context,
             show_progress=True,
         )
@@ -489,6 +730,7 @@ def chat_endpoint(req: ChatRequest):
                         "title": node.metadata.get("title"),
                         "year": node.metadata.get("year") if node.metadata.get("year") != -1 else None,
                         "page_number": page_number if page_number != -1 else None,
+                        "section_label": node.metadata.get("section_label") or None,
                         "journal_venue": node.metadata.get("journal_venue") or None,
                         "score": round(node.score, 3) if node.score else None,
                         "snippet": node.text[:200] + "..." if len(node.text) > 200 else node.text

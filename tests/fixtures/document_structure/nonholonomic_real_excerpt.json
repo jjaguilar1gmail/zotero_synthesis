@@ -18,34 +18,24 @@
   "expected": {
     "headings": [
       "Abstract",
-      "Introduction",
-      "Constraint Distributions and Ehresmann Connections",
-      "Systems with Symmetry",
-      "The Momentum Equation",
-      "A Review of Lagrangian Reduction",
-      "The Nonholonomic Connection and Reconstruction",
-      "The Reduced Lagrange-d'Alembert Equations",
-      "Examples",
-      "Conclusions",
-      "References",
-      "Abstract",
       "Introduction"
     ],
     "labels": [
-      "Body",
       "Abstract",
       "Introduction"
     ],
-    "levels": [1, 1, 1],
+    "levels": [1, 1],
     "paths": [
-      ["Front Matter"],
       ["Abstract"],
       ["Introduction"]
     ],
     "page_spans": [
       [1, 1],
-      [1, 1],
       [2, 2]
+    ],
+    "rejected_contains": [
+      "Table of Contents",
+      "1. Introduction ..................................... 22"
     ]
   }
 }

@@ -19,6 +19,8 @@ STRUCTURE_FIXTURES = [
     "roman_numeral_headings",
     "uppercase_headings",
     "page_break_merge",
+    "front_matter_filter",
+    "figure_table_guardrails",
     "psm_real_excerpt",
     "tarsier_real_excerpt",
     "treegpt_real_excerpt",

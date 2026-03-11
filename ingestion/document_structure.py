@@ -45,6 +45,46 @@ SECTION_ORDER = {
     "Body": 8,
 }
 
+CORE_SECTION_LABELS = {
+    "Abstract",
+    "Introduction",
+    "Background",
+    "Related Work",
+    "Methods",
+    "Results",
+    "Discussion",
+    "Conclusion",
+}
+
+ALLOWED_NON_CANONICAL_SHORT_HEADINGS = {
+    "references",
+    "acknowledgements",
+    "acknowledgments",
+    "examples",
+    "appendix",
+    "appendices",
+}
+
+DIAGRAM_LABEL_WORDS = {
+    "image",
+    "encoder",
+    "audio",
+    "text",
+    "metadata",
+    "fusion",
+    "prompt",
+    "visualization",
+    "embedding",
+    "mask",
+    "bbox",
+    "module",
+    "agent",
+    "execution",
+    "input",
+    "output",
+    "generate",
+}
+
 NUMBERED_HEADING_RE = re.compile(
     r"^(?P<prefix>(?:\d+(?:\.\d+)*|[IVXLCDM]+|[A-Z]))[.)]?\s+(?P<title>.+)$",
     re.IGNORECASE,
@@ -177,11 +217,97 @@ def clean_heading_title(title: str) -> str:
     return cleaned.strip(" :-")
 
 
+def alpha_ratio(text: str) -> float:
+    alpha_chars = [char for char in text if char.isalpha()]
+    alnum_chars = [char for char in text if char.isalnum()]
+    if not alnum_chars:
+        return 0.0
+    return len(alpha_chars) / len(alnum_chars)
+
+
+def digit_ratio(text: str) -> float:
+    digits = [char for char in text if char.isdigit()]
+    alnum_chars = [char for char in text if char.isalnum()]
+    if not alnum_chars:
+        return 0.0
+    return len(digits) / len(alnum_chars)
+
+
+def looks_like_table_of_contents_marker(line: str) -> bool:
+    return line.strip().lower() == "table of contents"
+
+
+def looks_like_table_of_contents_entry(line: str) -> bool:
+    stripped = line.strip()
+    if re.search(r"\.{2,}\s*\d+\s*$", stripped):
+        return True
+    return bool(re.match(r"^(?:\d+\.|[IVXLCDM]+\.)\s+.+\.{2,}\s*\d+\s*$", stripped, re.IGNORECASE))
+
+
+def looks_like_front_matter_metadata_line(line: str) -> bool:
+    lower = line.strip().lower()
+    metadata_tokens = [
+        "received:",
+        "accepted:",
+        "published online",
+        "copyright",
+        "doi",
+        "acm isbn",
+        "permission to make digital or hard copies",
+        "school of",
+        "institute of",
+        "university",
+        "laboratory",
+        "department",
+        "e-mail:",
+        "keywords",
+        "key words",
+        "communicated by",
+    ]
+    if any(token in lower for token in metadata_tokens):
+        return True
+    if "@" in line:
+        return True
+    if re.match(r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,5}$", line.strip()):
+        return True
+    if re.match(r"^[A-Z][a-z]+(?:,\s+[A-Z][a-z]+)+$", line.strip()):
+        return True
+    return False
+
+
+def looks_like_figure_or_table_heading(line: str) -> bool:
+    stripped = line.strip()
+    lower = stripped.lower()
+    if lower.startswith(("figure ", "fig. ", "table ")):
+        return True
+    if re.match(r"^(figure|fig\.|table)\s*\d+", lower):
+        return True
+    normalized_words = [word for word in normalize_section_heading(stripped).split() if word]
+    if normalized_words and len(normalized_words) <= 3 and all(word in DIAGRAM_LABEL_WORDS for word in normalized_words):
+        return True
+    if digit_ratio(stripped) > 0.35 and alpha_ratio(stripped) < 0.5:
+        return True
+    return False
+
+
+def is_allowed_short_heading(normalized_heading: str) -> bool:
+    return normalized_heading in ALLOWED_NON_CANONICAL_SHORT_HEADINGS or normalized_heading in {
+        alias
+        for aliases in SECTION_ALIASES.values()
+        for alias in aliases
+    }
+
+
 def is_short_heading_candidate(line: str) -> bool:
     words = line.split()
     if not words or len(words) > 12 or len(line) > 90:
         return False
     if line.endswith((".", ";", ",")):
+        return False
+    normalized = normalize_section_heading(line)
+    if len(words) < 2 and not is_allowed_short_heading(normalized):
+        return False
+    if digit_ratio(line) > 0.3 or alpha_ratio(line) < 0.55:
         return False
     return line.isupper() or line == line.title()
 
@@ -237,7 +363,13 @@ def detect_section_heading(
     canonical_label = find_canonical_section_label(normalized_title)
 
     if has_numbering:
-        if title.endswith((".", ";", ",")) or len(title) > 120 or len(title.split()) > 14:
+        if (
+            title.endswith((".", ";", ","))
+            or len(title) > 120
+            or len(title.split()) > 14
+            or (canonical_label is None and title and title[0].islower())
+            or looks_like_figure_or_table_heading(title)
+        ):
             return None, RejectedHeadingCandidate(
                 page_number=page_number,
                 line_index=line_index,
@@ -325,6 +457,8 @@ def analyze_document_structure(
     current_lines: list[str] = []
     current_pages: list[int] = []
     active_top_level_label = "Body"
+    content_started = False
+    inside_table_of_contents = False
 
     for page_number, page_text in pages:
         normalized_page = normalize_page_text(page_text)
@@ -333,11 +467,69 @@ def analyze_document_structure(
 
         page_lines = [line.strip() for line in normalized_page.splitlines() if line.strip()]
         for line_index, line in enumerate(page_lines):
+            if looks_like_table_of_contents_marker(line):
+                inside_table_of_contents = True
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="table-of-contents-marker",
+                    )
+                )
+                continue
+
+            if inside_table_of_contents and looks_like_table_of_contents_entry(line):
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="table-of-contents-entry",
+                    )
+                )
+                continue
+
+            if looks_like_figure_or_table_heading(line):
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="figure-table-label",
+                    )
+                )
+                continue
+
             detected_heading, rejected = detect_section_heading(line, page_number, line_index)
             if rejected:
                 report.rejected_candidates.append(rejected)
 
+            if not content_started and looks_like_front_matter_metadata_line(line):
+                report.rejected_candidates.append(
+                    RejectedHeadingCandidate(
+                        page_number=page_number,
+                        line_index=line_index,
+                        raw_line=line,
+                        reason="front-matter-metadata",
+                    )
+                )
+                continue
             if detected_heading:
+                if inside_table_of_contents and detected_heading.canonical_label in CORE_SECTION_LABELS:
+                    inside_table_of_contents = False
+
+                if not content_started and detected_heading.canonical_label is None:
+                    report.rejected_candidates.append(
+                        RejectedHeadingCandidate(
+                            page_number=page_number,
+                            line_index=line_index,
+                            raw_line=line,
+                            reason="front-matter-heading",
+                        )
+                    )
+                    continue
+
                 section = build_section_record(
                     paper_record,
                     len(report.sections),
@@ -369,12 +561,19 @@ def analyze_document_structure(
                 current_heading = detected_heading.heading_title
                 current_level = detected_heading.level
 
+                if detected_heading.canonical_label in CORE_SECTION_LABELS:
+                    content_started = True
+
                 if detected_heading.inline_text:
                     current_lines.append(detected_heading.inline_text)
                 continue
 
             if page_number is not None and (not current_pages or current_pages[-1] != page_number):
                 current_pages.append(page_number)
+
+            if not content_started:
+                continue
+
             current_lines.append(line)
 
     final_section = build_section_record(

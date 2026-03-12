@@ -55,6 +55,17 @@ def evaluate_expectations(expect: dict[str, Any] | None, sources: list[dict[str,
             }
         )
 
+    max_papers = expect.get("max_papers")
+    if max_papers is not None:
+        checks.append(
+            {
+                "name": "max_papers",
+                "passed": paper_count <= int(max_papers),
+                "actual": paper_count,
+                "expected": int(max_papers),
+            }
+        )
+
     min_evidence_chunks = expect.get("min_evidence_chunks")
     if min_evidence_chunks is not None:
         checks.append(

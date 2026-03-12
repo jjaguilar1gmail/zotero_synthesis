@@ -54,10 +54,20 @@ def test_infer_retrieval_plan_extracts_years_sections_and_comparative_mode():
     assert plan.diverse_paper_goal == 3
 
 
+def test_infer_retrieval_plan_for_single_paper_explanation_targets_one_paper():
+    plan = infer_retrieval_plan("Explain the main idea of the XGrammar 2 paper.")
+
+    assert plan.route_label == "single_paper_explanation"
+    assert plan.comparative is False
+    assert plan.target_papers == 1
+    assert plan.per_paper_limit == 4
+
+
 def test_classify_query_route_distinguishes_risk_survey_and_lookup_queries():
     assert classify_query_route("What risks and limitations do these agent papers discuss?").label == "risk_analysis"
     assert classify_query_route("What broader survey themes appear across these papers?").label == "survey_synthesis"
     assert classify_query_route("Which paper introduces Toolformer?").label == "single_anchor_lookup"
+    assert classify_query_route("Explain the main idea of the XGrammar 2 paper.").label == "single_paper_explanation"
 
 
 def test_classify_query_route_promotes_multi_paper_tool_and_cost_queries_to_comparison():

@@ -199,12 +199,15 @@ ROUTE_LABELS = {
     "survey_synthesis",
     "risk_analysis",
     "single_anchor_lookup",
+    "single_paper_explanation",
     "topic_synthesis",
 }
 
 SURVEY_ROUTE_MARKERS = {"survey", "agenda", "themes", "research agenda", "broader", "overview"}
 RISK_ROUTE_MARKERS = {"risk", "risks", "limitation", "limitations", "failure", "failures", "safety", "challenge", "challenges"}
 LOOKUP_ROUTE_MARKERS = {"what is", "define", "who is", "when did", "which paper", "find the paper", "where is"}
+EXPLANATION_ROUTE_MARKERS = {"explain", "summarize", "describe", "walk me through", "main idea", "core idea", "how does"}
+SINGLE_PAPER_MARKERS = {"this paper", "the paper", "that paper", "paper titled", "paper called", "in this paper"}
 MULTI_PAPER_MARKERS = {"these papers", "the papers", "agent papers", "papers in this collection", "across the papers"}
 COMPARISON_TOPIC_PROFILES = {"tool_use", "geospatial", "cost", "reinforcement_learning", "structured_generation"}
 
@@ -449,6 +452,8 @@ def classify_query_route(query_text: str, backend: str = "deterministic") -> Que
         "has_survey_markers": any(marker in lowered for marker in SURVEY_ROUTE_MARKERS),
         "has_risk_markers": any(marker in lowered for marker in RISK_ROUTE_MARKERS),
         "has_lookup_markers": any(marker in lowered for marker in LOOKUP_ROUTE_MARKERS),
+        "has_explanation_markers": any(marker in lowered for marker in EXPLANATION_ROUTE_MARKERS),
+        "has_single_paper_markers": any(marker in lowered for marker in SINGLE_PAPER_MARKERS) or ("paper" in lowered and "papers" not in lowered),
         "has_multi_paper_markers": any(marker in lowered for marker in MULTI_PAPER_MARKERS) or "papers" in lowered,
         "has_how_do_pattern": lowered.startswith("how do ") or lowered.startswith("how are "),
         "has_what_do_these_papers_say": "what do these papers say" in lowered,
@@ -463,6 +468,12 @@ def classify_query_route(query_text: str, backend: str = "deterministic") -> Que
         label = "survey_synthesis"
     elif route_features["has_lookup_markers"] and not route_features["has_comparison_markers"]:
         label = "single_anchor_lookup"
+    elif (
+        route_features["has_explanation_markers"]
+        and route_features["has_single_paper_markers"]
+        and not route_features["has_multi_paper_markers"]
+    ):
+        label = "single_paper_explanation"
     elif route_features["has_comparison_markers"]:
         label = "comparison"
     elif route_features["has_multi_paper_markers"] and (
@@ -510,6 +521,11 @@ def infer_retrieval_plan(query_text: str) -> RetrievalPlan:
         target_papers = 2
         per_paper_limit = 3
         max_evidence_chunks = 5
+    elif route.label == "single_paper_explanation":
+        dense_top_k = 16
+        target_papers = 1
+        per_paper_limit = 4
+        max_evidence_chunks = 6
 
     return RetrievalPlan(
         query_text=query_text,
@@ -858,6 +874,11 @@ def rerank_evidence_candidates(query_text: str, plan: RetrievalPlan, candidates:
         if title_overlap > 0.0 and plan.topic_keywords:
             score += 0.08
 
+        if plan.route_label == "single_paper_explanation":
+            score += title_overlap * 0.35
+            if effective_section_label in {"Introduction", "Methods", "Results"}:
+                score += 0.05
+
         if plan.route_label == "survey_synthesis":
             survey_overlap = lexical_overlap_score(survey_terms, f"{title} {section_heading or ''}")
             score += survey_overlap * 0.35
@@ -938,6 +959,13 @@ def run_retrieval_pipeline(index: VectorStoreIndex, query_text: str, collection_
                 limit=max(len(dense_candidates) + len(seeded_candidates), plan.dense_top_k * 2),
             )
     filtered_candidates = adaptively_filter_candidates(plan, dense_candidates)
+    if collection_id is not None and plan.comparative and count_unique_papers(filtered_candidates) < plan.diverse_paper_goal:
+        seeded_filtered_candidates = seed_candidates_from_collection_metadata(collection_id, plan, filtered_candidates)
+        if seeded_filtered_candidates:
+            filtered_candidates = merge_dense_candidate_batches(
+                [filtered_candidates, seeded_filtered_candidates],
+                limit=max(len(filtered_candidates) + len(seeded_filtered_candidates), plan.dense_top_k * 2),
+            )
 
     reranked_candidates = rerank_evidence_candidates(query_text, plan, filtered_candidates)
     selected_chunks = select_evidence_chunks(plan, reranked_candidates)

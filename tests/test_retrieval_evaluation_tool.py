@@ -59,6 +59,32 @@ def test_evaluate_expectations_fails_when_sources_do_not_meet_constraints():
     assert any(not check["passed"] for check in result["checks"])
 
 
+def test_evaluate_expectations_supports_max_papers_for_single_paper_routes():
+    sources = [
+        {
+            "title": "Paper A",
+            "section_label": "Methods",
+            "section_heading": "Methods",
+            "snippet": "Core algorithm description.",
+        }
+    ]
+    retrieval_summary = {"papers_considered": 1, "evidence_chunks": 3}
+
+    result = evaluate_expectations(
+        {
+            "min_papers": 1,
+            "max_papers": 1,
+            "min_evidence_chunks": 2,
+            "keywords_any": ["algorithm"],
+        },
+        sources,
+        retrieval_summary,
+    )
+
+    assert result["status"] == "pass"
+    assert any(check["name"] == "max_papers" and check["passed"] for check in result["checks"])
+
+
 def test_build_retrieval_summary_carries_route_metadata():
     from main import RetrievalPlan, RetrievalResult
     from tools.evaluate_retrieval import build_retrieval_summary

@@ -1,0 +1,53 @@
+{
+  "paper": {
+    "paper_id": "fixture-publication-visual",
+    "title": "Fixture Publication Visual Guardrails",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "1 Introduction\nIntroductory text.\nEDITED BY\nREVIEWED BY\nUnited States\nThe International Journal of Robotics Research 30(8)\nAdaptive Cache\nGlobal Cache Pool\nToken Mask Cache\n2 Methods\nMethod details.\n4. In summary, the model did not show relevant performance increases or\nResults\nResult details.\nCorresponding Author:\nTool Call\nCandidate Pool\nFinal Output\nConclusion\nClosing remarks.\nReferences\n[1] Example reference"
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Introduction",
+      "Methods",
+      "Results",
+      "Conclusion",
+      "References"
+    ],
+    "labels": [
+      "Introduction",
+      "Methods",
+      "Results",
+      "Conclusion",
+      "References"
+    ],
+    "levels": [1, 1, 1, 1, 1],
+    "paths": [
+      ["Introduction"],
+      ["Methods"],
+      ["Results"],
+      ["Conclusion"],
+      ["References"]
+    ],
+    "rejected_contains": [
+      "EDITED BY",
+      "REVIEWED BY",
+      "United States",
+      "The International Journal of Robotics Research 30(8)",
+      "Adaptive Cache",
+      "Global Cache Pool",
+      "Token Mask Cache",
+      "4. In summary, the model did not show relevant performance increases or",
+      "Corresponding Author:",
+      "Tool Call",
+      "Candidate Pool",
+      "Final Output",
+      "[1] Example reference"
+    ]
+  }
+}

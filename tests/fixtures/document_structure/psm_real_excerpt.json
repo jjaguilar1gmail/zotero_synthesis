@@ -1,0 +1,51 @@
+{
+  "paper": {
+    "paper_id": "fixture-psm-real-excerpt",
+    "title": "PSM Real Excerpt",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "ABSTRACT\nperceives at a location. In this work, we propose a framework for mapping soundscapes across the Earth. Since soundscapes involve sound distributions that span varying spatial scales, we represent locations with multi-scale satellite imagery and learn a joint representation among this imagery, audio, and text.\n1 INTRODUCTION\nSoundscape mapping involves understanding the relationship between locations on Earth and the distribution of sounds at those locations."
+    },
+    {
+      "page_number": 2,
+      "text": "The main contributions of our work are as follows:\n- We introduce a new large-scale dataset containing over 300k geotagged audios paired with high-resolution and low-resolution satellite imagery.\n2 RELATED WORKS\n2.1 Audio Visual Learning\nAn intricate relationship exists between the audio and visual attributes of a scene.\n3 METHODS\n3.1 Dataset Creation\nWe curated a new large-scale dataset, GeoSound, collecting geotagged audios from four different sources.\n3.2 Approach\nThis section describes our framework (PSM) for learning a metadata-aware, probabilistic, and tri-modal embedding space."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "ABSTRACT",
+      "INTRODUCTION",
+      "RELATED WORKS",
+      "Audio Visual Learning",
+      "METHODS",
+      "Dataset Creation",
+      "Approach"
+    ],
+    "labels": [
+      "Abstract",
+      "Introduction",
+      "Related Work",
+      "Methods",
+      "Methods"
+    ],
+    "levels": [1, 1, 2, 2, 2],
+    "paths": [
+      ["ABSTRACT"],
+      ["INTRODUCTION"],
+      ["RELATED WORKS", "Audio Visual Learning"],
+      ["METHODS", "Dataset Creation"],
+      ["METHODS", "Approach"]
+    ],
+    "page_spans": [
+      [1, 1],
+      [1, 2],
+      [2, 2],
+      [2, 2],
+      [2, 2]
+    ]
+  }
+}

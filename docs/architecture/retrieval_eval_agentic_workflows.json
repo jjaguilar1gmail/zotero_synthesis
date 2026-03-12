@@ -1,0 +1,116 @@
+{
+  "collection_name": "Agentic Workflows",
+  "collection_id_hint": 3,
+  "notes": "Tailored retrieval evaluation set for the Agentic Workflows Zotero collection. This collection was detected locally but was not indexed at the time this file was created, so index collection 3 before running the evaluator.",
+  "questions": [
+    {
+      "id": "multi-agent-decision-making",
+      "expected_route": "comparison",
+      "query": "Compare how the multi-agent papers coordinate decisions or collaboration across agents.",
+      "notes": "Should surface papers like Debate or Vote, iMAD, and Stronger-MAS, ideally from methods or results sections.",
+      "expect": {
+        "min_papers": 3,
+        "min_evidence_chunks": 4,
+        "section_labels_any": ["Methods", "Results"],
+        "keywords_any": ["multi-agent", "debate", "vote", "collaborative", "stronger-mas", "imad"]
+      }
+    },
+    {
+      "id": "tool-use-and-acting",
+      "expected_route": "comparison",
+      "query": "How do the agent papers integrate tool use, action, or acting loops?",
+      "notes": "Should pull evidence from ReAct, Toolformer, RS-Agent, or related agent workflow papers.",
+      "expect": {
+        "min_papers": 2,
+        "min_evidence_chunks": 4,
+        "section_labels_any": ["Methods", "Introduction", "Results"],
+        "keywords_any": ["tool", "acting", "react", "toolformer", "rs-agent"]
+      }
+    },
+    {
+      "id": "rl-agent-training",
+      "expected_route": "comparison",
+      "query": "Compare the reinforcement learning or policy optimization approaches used for agent training and planning.",
+      "notes": "Targets papers like Encouraging Good Processes, Agentic Reasoning and Tool Integration, and Agentic Reinforced Policy Optimization.",
+      "expect": {
+        "min_papers": 3,
+        "min_evidence_chunks": 4,
+        "section_labels_any": ["Methods", "Results"],
+        "keywords_any": ["reinforcement", "policy", "optimization", "planning", "reward"]
+      }
+    },
+    {
+      "id": "geospatial-agent-workflows",
+      "expected_route": "comparison",
+      "query": "Compare the geospatial or remote-sensing agent workflows across the papers in this collection.",
+      "notes": "Should connect Tree-GPT, Change-Agent, Remote Sensing ChatGPT, RS-Agent, Thinking with Map, or GeoAgent.",
+      "expect": {
+        "min_papers": 3,
+        "min_evidence_chunks": 4,
+        "section_labels_any": ["Methods", "Results", "Introduction"],
+        "keywords_any": ["remote sensing", "geolocalization", "map", "geoagent", "tree-gpt", "change-agent"]
+      }
+    },
+    {
+      "id": "cost-and-budget-tradeoffs",
+      "expected_route": "comparison",
+      "query": "What do these papers say about cost, latency, routing, or budget tradeoffs for agentic systems?",
+      "notes": "Should retrieve evidence from Cost of Dynamic Reasoning, Adaptive LLM Routing under Budget Constraints, and possibly evaluation-heavy results sections elsewhere.",
+      "expect": {
+        "min_papers": 2,
+        "min_evidence_chunks": 3,
+        "section_labels_any": ["Results", "Discussion", "Conclusion"],
+        "keywords_any": ["cost", "latency", "budget", "routing", "throughput"]
+      }
+    },
+    {
+      "id": "agent-risks-and-failure-modes",
+      "expected_route": "risk_analysis",
+      "query": "What risks, limitations, or failure modes of agentic systems are discussed across these papers?",
+      "notes": "Should surface the self-evolving agents risk paper, surveys, and possibly conclusion/discussion sections from other agent system papers.",
+      "expect": {
+        "min_papers": 2,
+        "min_evidence_chunks": 3,
+        "section_labels_any": ["Discussion", "Conclusion", "Results"],
+        "keywords_any": ["risk", "limitation", "failure", "self-evolving", "safety"]
+      }
+    },
+    {
+      "id": "structured-generation-and-constraints",
+      "expected_route": "comparison",
+      "query": "How are structured generation, constrained decoding, or grammar-based control used in these agent papers?",
+      "notes": "Should at minimum retrieve XGrammar 2 and may connect to tool-calling or routing papers if the retrieval is behaving well.",
+      "expect": {
+        "min_papers": 1,
+        "min_evidence_chunks": 2,
+        "section_labels_any": ["Methods", "Results"],
+        "keywords_any": ["structured generation", "constrained decoding", "grammar", "xgrammar"]
+      }
+    },
+    {
+      "id": "surveys-and-research-agenda",
+      "expected_route": "survey_synthesis",
+      "query": "What broader research agenda or survey-level themes appear across the survey and agenda papers in this collection?",
+      "notes": "Targets the Autonomous GIS agenda, self-evolving agent survey, long chain-of-thought survey, and context engineering survey.",
+      "expect": {
+        "min_papers": 2,
+        "min_evidence_chunks": 3,
+        "section_labels_any": ["Introduction", "Discussion", "Conclusion"],
+        "keywords_any": ["survey", "agenda", "context engineering", "autonomous gis", "reasoning era"]
+      }
+    },
+    {
+      "id": "single-paper-xgrammar-explanation",
+      "expected_route": "single_paper_explanation",
+      "query": "Explain the main idea of the XGrammar 2 paper and how its method works.",
+      "notes": "Should stay anchored to XGrammar 2 and pull within-paper method/evaluation evidence rather than broad cross-paper synthesis.",
+      "expect": {
+        "min_papers": 1,
+        "max_papers": 1,
+        "min_evidence_chunks": 3,
+        "section_labels_any": ["Methods", "Results"],
+        "keywords_any": ["xgrammar", "structured generation", "grammar", "constrained decoding"]
+      }
+    }
+  ]
+}

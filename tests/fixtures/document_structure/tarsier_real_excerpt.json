@@ -1,0 +1,37 @@
+{
+  "paper": {
+    "paper_id": "fixture-tarsier-real-excerpt",
+    "title": "Tarsier Real Excerpt",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "Abstract Napier and Walker's (1967) locomotor category of vertical clinging and leaping (VC&L) is one of the most familiar in primatology. We attempt to reanalyze field observations of locomotion and habitat use in Tarsius bancanus using loglinear modeling."
+    },
+    {
+      "page_number": 2,
+      "text": "Introduction\nWe are all familiar with Napier and Walker's (1967) locomotor category of vertical clinging and leaping (VC&L). Those primates to which it best applies include some of the most morphologically specialized species."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Abstract",
+      "Introduction"
+    ],
+    "labels": [
+      "Abstract",
+      "Introduction"
+    ],
+    "levels": [1, 1],
+    "paths": [
+      ["Abstract"],
+      ["Introduction"]
+    ],
+    "page_spans": [
+      [1, 1],
+      [2, 2]
+    ]
+  }
+}

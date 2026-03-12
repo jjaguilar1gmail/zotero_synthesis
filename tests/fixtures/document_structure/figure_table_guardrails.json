@@ -1,0 +1,37 @@
+{
+  "paper": {
+    "paper_id": "fixture-figure-table-guardrails",
+    "title": "Figure Table Guardrails",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "METHODS\nWe describe the protocol for the experiment.\nFigure 1: Model overview\nImage Encoder\nPrompt\nTable 1 Results summary\n0.512 946 0.516 923\nRESULTS\nWe report the main outcomes here."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "METHODS",
+      "RESULTS"
+    ],
+    "labels": [
+      "Methods",
+      "Results"
+    ],
+    "levels": [1, 1],
+    "paths": [
+      ["METHODS"],
+      ["RESULTS"]
+    ],
+    "page_spans": [
+      [1, 1],
+      [1, 1]
+    ],
+    "rejected_contains": [
+      "Figure 1: Model overview",
+      "Table 1 Results summary"
+    ]
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "paper": {
+    "paper_id": "fixture-table-endmatter",
+    "title": "Fixture Table Endmatter Paper",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "I. INTRODUCTION\nIntroductory text.\nIII. METHODOLOGY\nMethod text.\nACCURACY,LATENCY,ANDGPUENERGY CONSUMPTION WHEN\nPARENTHESES INDICATE THE RELATIVE INCREASE OVERSHAREGPT (THE\nPower @ 71.4 Million\nRESULTS\nModel Prec. ↑ Rec. ↑ F1 ↑\nSex / N\nResult text.\nConclusion\nClosing text.\nKOON, HARVEY LAM, NAOMI LEONARD, ANDREW LEWIS\nReferences\nP. Kamath, \"Keyformer: Kv cache reduction through key tokens\""
+    }
+  ],
+  "expected": {
+    "headings": [
+      "INTRODUCTION",
+      "METHODOLOGY",
+      "RESULTS",
+      "Conclusion",
+      "References"
+    ],
+    "labels": [
+      "Introduction",
+      "Methods",
+      "Results",
+      "Conclusion",
+      "References"
+    ],
+    "levels": [1, 1, 1, 1, 1],
+    "paths": [
+      ["INTRODUCTION"],
+      ["METHODOLOGY"],
+      ["RESULTS"],
+      ["Conclusion"],
+      ["References"]
+    ],
+    "rejected_contains": [
+      "ACCURACY,LATENCY,ANDGPUENERGY CONSUMPTION WHEN",
+      "PARENTHESES INDICATE THE RELATIVE INCREASE OVERSHAREGPT (THE",
+      "Power @ 71.4 Million",
+      "Model Prec. ↑ Rec. ↑ F1 ↑",
+      "Sex / N",
+      "KOON, HARVEY LAM, NAOMI LEONARD, ANDREW LEWIS",
+      "P. Kamath, \"Keyformer: Kv cache reduction through key tokens\""
+    ]
+  }
+}

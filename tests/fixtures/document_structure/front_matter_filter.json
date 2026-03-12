@@ -1,0 +1,39 @@
+{
+  "paper": {
+    "paper_id": "fixture-front-matter-filter",
+    "title": "Front Matter Filter",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "PSM: Learning Probabilistic Embeddings for Multi-scale Zero-Shot Soundscape Mapping\nSubash Khanal\nWashington University in St. Louis\nSaint Louis, United States\nk.subash@wustl.edu\nKEYWORDS\nSoundscape Mapping; Audio Visual Learning; Probabilistic Representation Learning\nABSTRACT\nA soundscape is defined by the acoustic environment a person perceives at a location.\n1 INTRODUCTION\nSoundscape mapping involves understanding the relationship between locations on Earth and the distribution of sounds at those locations."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "ABSTRACT",
+      "INTRODUCTION"
+    ],
+    "labels": [
+      "Abstract",
+      "Introduction"
+    ],
+    "levels": [1, 1],
+    "paths": [
+      ["ABSTRACT"],
+      ["INTRODUCTION"]
+    ],
+    "page_spans": [
+      [1, 1],
+      [1, 1]
+    ],
+    "rejected_contains": [
+      "Subash Khanal",
+      "Washington University in St. Louis",
+      "k.subash@wustl.edu",
+      "KEYWORDS"
+    ]
+  }
+}

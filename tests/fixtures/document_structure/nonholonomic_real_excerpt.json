@@ -1,0 +1,41 @@
+{
+  "paper": {
+    "paper_id": "fixture-nonholonomic-real-excerpt",
+    "title": "Nonholonomic Real Excerpt",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "Table of Contents\nAbstract ......................................... 21\n1. Introduction ..................................... 22\n2. Constraint Distributions and Ehresmann Connections ............... 30\n3. Systems with Symmetry ............................... 38\n4. The Momentum Equation .............................. 47\n5. A Review of Lagrangian Reduction ......................... 57\n6. The Nonholonomic Connection and Reconstruction ................ 62\n7. The Reduced Lagrange-d'Alembert Equations ................... 70\n8. Examples ...................................... 77\n9. Conclusions ..................................... 94\nReferences ........................................ 95\nAbstract\nThis work develops the geometry and dynamics of mechanical systems with nonholonomic constraints and symmetry from the perspective of Lagrangian mechanics."
+    },
+    {
+      "page_number": 2,
+      "text": "1. Introduction\nProblems of nonholonomic mechanics, including many problems in robotics, wheeled vehicular dynamics and motion generation, have attracted considerable attention."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Abstract",
+      "Introduction"
+    ],
+    "labels": [
+      "Abstract",
+      "Introduction"
+    ],
+    "levels": [1, 1],
+    "paths": [
+      ["Abstract"],
+      ["Introduction"]
+    ],
+    "page_spans": [
+      [1, 1],
+      [2, 2]
+    ],
+    "rejected_contains": [
+      "Table of Contents",
+      "1. Introduction ..................................... 22"
+    ]
+  }
+}

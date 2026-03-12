@@ -1,0 +1,35 @@
+{
+  "paper": {
+    "paper_id": "fixture-uppercase",
+    "title": "Fixture Uppercase Paper",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "INTRODUCTION\nThis section introduces the topic.\nBACKGROUND\nImportant context appears here.\nMETHODS\nThe procedure is described here.\nDISCUSSION\nWe interpret the results in this section."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "INTRODUCTION",
+      "BACKGROUND",
+      "METHODS",
+      "DISCUSSION"
+    ],
+    "labels": [
+      "Introduction",
+      "Background",
+      "Methods",
+      "Discussion"
+    ],
+    "levels": [1, 1, 1, 1],
+    "paths": [
+      ["INTRODUCTION"],
+      ["BACKGROUND"],
+      ["METHODS"],
+      ["DISCUSSION"]
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "paper": {
+    "paper_id": "fixture-affiliation-reference",
+    "title": "Fixture Affiliation Reference Paper",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "Abstract\nA short abstract line.\n1 Introduction\nIntroductory text.\n2 Results\nResult text.\nReferences\nP. Kamath, \"Keyformer: Kv cache reduction through key tokens\"\nA. Tumanov, and R. Ramjee, \"Taming Throughput-Latency tradeoff\"\n[Online]. Available: https://arxiv.org/abs/2501.12948\nJERROLD E. MARSDEN\nPasadena, California 91125"
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Abstract",
+      "Introduction",
+      "Results",
+      "References"
+    ],
+    "labels": [
+      "Abstract",
+      "Introduction",
+      "Results",
+      "References"
+    ],
+    "levels": [1, 1, 1, 1],
+    "paths": [
+      ["Abstract"],
+      ["Introduction"],
+      ["Results"],
+      ["References"]
+    ],
+    "rejected_contains": [
+      "P. Kamath, \"Keyformer: Kv cache reduction through key tokens\"",
+      "A. Tumanov, and R. Ramjee, \"Taming Throughput-Latency tradeoff\"",
+      "[Online]. Available: https://arxiv.org/abs/2501.12948",
+      "JERROLD E. MARSDEN",
+      "Pasadena, California 91125"
+    ]
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "paper": {
+    "paper_id": "fixture-equation-boilerplate",
+    "title": "Fixture Equation Boilerplate Paper",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "ARTICLE IN PRESS\nAbstract\nA short abstract line.\n1 Introduction\nOLc OLc OLc OL b °\n= (r, s), we write 7 as\nThe study starts here.\n2 Methods\n(4.1.3)\nThe method is described here.\n3 Results\nThe result text continues."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Abstract",
+      "Introduction",
+      "Methods",
+      "Results"
+    ],
+    "labels": [
+      "Abstract",
+      "Introduction",
+      "Methods",
+      "Results"
+    ],
+    "levels": [1, 1, 1, 1],
+    "paths": [
+      ["Abstract"],
+      ["Introduction"],
+      ["Methods"],
+      ["Results"]
+    ],
+    "rejected_contains": [
+      "ARTICLE IN PRESS",
+      "OLc OLc OLc OL b °",
+      "= (r, s), we write 7 as",
+      "(4.1.3)"
+    ]
+  }
+}

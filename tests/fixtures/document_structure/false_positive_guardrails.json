@@ -1,0 +1,39 @@
+{
+  "paper": {
+    "paper_id": "fixture-guardrails",
+    "title": "Fixture Guardrails Paper",
+    "abstract": "",
+    "collection_id": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "1 Introduction\nThe study starts here.\nresults show that the model generalizes well across trials.\n2 Methods\nExperimental Setup\nWe outline the protocol.\n2.1 Training Details\nThe optimizer and schedule are listed here.\n3 Results\nThe quantitative evaluation is reported here."
+    }
+  ],
+  "expected": {
+    "headings": [
+      "Introduction",
+      "Methods",
+      "Experimental Setup",
+      "Training Details",
+      "Results"
+    ],
+    "labels": [
+      "Introduction",
+      "Methods",
+      "Methods",
+      "Results"
+    ],
+    "levels": [1, 1, 2, 1],
+    "paths": [
+      ["Introduction"],
+      ["Experimental Setup"],
+      ["Experimental Setup", "Training Details"],
+      ["Results"]
+    ],
+    "rejected_contains": [
+      "results show that the model generalizes well across trials."
+    ]
+  }
+}

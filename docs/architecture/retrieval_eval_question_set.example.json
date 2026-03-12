@@ -1,0 +1,37 @@
+{
+  "questions": [
+    {
+      "id": "compare-datasets",
+      "query": "Compare the datasets used across these papers.",
+      "notes": "Cross-paper retrieval should pull methods or results evidence from multiple papers.",
+      "expect": {
+        "min_papers": 2,
+        "min_evidence_chunks": 4,
+        "section_labels_any": ["Methods", "Results"],
+        "keywords_any": ["dataset", "benchmark"]
+      }
+    },
+    {
+      "id": "recent-methods",
+      "query": "Summarize the methods used since 2022.",
+      "notes": "The planner should infer a year floor and methods-oriented evidence.",
+      "expect": {
+        "min_papers": 1,
+        "min_evidence_chunks": 2,
+        "section_labels_any": ["Methods"],
+        "keywords_any": ["method", "approach"]
+      }
+    },
+    {
+      "id": "limitations",
+      "query": "What limitations or failure cases do these papers mention?",
+      "notes": "This is a harder retrieval question because the answer may come from discussion or conclusion sections.",
+      "expect": {
+        "min_papers": 1,
+        "min_evidence_chunks": 2,
+        "section_labels_any": ["Discussion", "Conclusion"],
+        "keywords_any": ["limitation", "failure", "future work"]
+      }
+    }
+  ]
+}

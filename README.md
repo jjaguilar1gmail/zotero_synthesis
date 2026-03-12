@@ -171,6 +171,14 @@ python tools/review_document_structure_batch.py --input-dir path/to/pdf/corpus -
 
 That batch review now also writes an HTML index and one HTML report per paper.
 
+Run a retrieval evaluation question set against an indexed Zotero collection:
+
+```bash
+python tools/evaluate_retrieval.py --collection-id 123 --questions-file docs/architecture/retrieval_eval_question_set.example.json --output-dir debug_output/retrieval_eval
+```
+
+Add `--with-answer` if you also want synthesized answers captured alongside the retrieval evidence for each evaluation query.
+
 Generate a structurally diverse recommendation shortlist directly from your Zotero library:
 
 ```bash

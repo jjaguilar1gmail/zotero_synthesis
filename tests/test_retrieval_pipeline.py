@@ -4,8 +4,10 @@ from pathlib import Path
 
 from main import (
     adaptively_filter_candidates,
+    build_answer_prompt,
     build_chunk_fingerprint,
     build_dense_query_variants,
+    build_deterministic_grounded_answer,
     is_near_duplicate_chunk,
     SafeChromaVectorStore,
     build_retrieval_only_response,
@@ -15,12 +17,16 @@ from main import (
     infer_effective_section_label,
     infer_retrieval_plan,
     is_low_value_section,
+    parse_grounded_answer,
+    format_grounded_answer_text,
     merge_dense_candidate_batches,
     metadata_matches_plan,
+    RetrievalResult,
     rerank_evidence_candidates,
     sanitize_utf8_text,
     score_paper_seed_relevance,
     select_evidence_chunks,
+    synthesize_grounded_answer,
 )
 from ingestion.document_structure import PaperMetadata, PaperRecord
 
@@ -83,6 +89,31 @@ def test_build_dense_query_variants_adds_topic_and_route_expansions_without_dupl
     assert variants[0] == survey_plan.query_text
     assert any("survey review agenda overview future directions" in variant.lower() for variant in variants)
     assert len({variant.lower() for variant in variants}) == len(variants)
+
+
+def test_build_answer_prompt_includes_route_specific_guidance_for_comparison_queries():
+    plan = infer_retrieval_plan("How do the agent papers integrate tool use, action, or acting loops?")
+    candidate = make_candidate(
+        text="Agents reason, choose tools, execute actions, observe results, and update state.",
+        score=0.91,
+        paper_id="paper-a",
+        title="Paper A",
+        year=2024,
+        section_label="Methods",
+        section_heading="Workflow",
+    )
+    retrieval = RetrievalResult(
+        plan=plan,
+        dense_candidates=[candidate],
+        filtered_candidates=[candidate],
+        reranked_candidates=rerank_evidence_candidates(plan.query_text, plan, [candidate]),
+        selected_chunks=select_evidence_chunks(plan, rerank_evidence_candidates(plan.query_text, plan, [candidate])),
+    )
+
+    prompt = build_answer_prompt(plan.query_text, "", retrieval)
+
+    assert "Synthesize differences or tradeoffs across papers" in prompt
+    assert "describe the loop structure" in prompt
 
 
 def test_metadata_matches_plan_respects_year_and_section_constraints():
@@ -472,5 +503,247 @@ def test_build_retrieval_only_response_lists_top_evidence():
         )
     )
 
-    assert "Top evidence" in response
+    assert "Answer synthesis is unavailable" in response
     assert "[S1]" in response
+
+
+def test_parse_grounded_answer_accepts_valid_citations_only():
+    plan = infer_retrieval_plan("Compare results for gait analysis")
+    candidates = [
+        make_candidate(
+            text="This results section reports strong gait analysis accuracy improvements.",
+            score=0.82,
+            paper_id="paper-a",
+            title="Paper A",
+            year=2024,
+            section_label="Results",
+            section_heading="Results",
+        ),
+        make_candidate(
+            text="These findings compare gait analysis benchmarks across datasets.",
+            score=0.79,
+            paper_id="paper-b",
+            title="Paper B",
+            year=2025,
+            section_label="Results",
+            section_heading="Benchmark Results",
+        ),
+    ]
+    reranked = rerank_evidence_candidates("Compare results for gait analysis", plan, candidates)
+    selected = select_evidence_chunks(plan, reranked)
+    retrieval = RetrievalResult(
+        plan=plan,
+        dense_candidates=candidates,
+        filtered_candidates=candidates,
+        reranked_candidates=reranked,
+        selected_chunks=selected,
+    )
+
+    parsed = parse_grounded_answer(
+        '{"answer_summary": "Two papers report gait improvements.", "claims": [{"claim_text": "This results section reports strong gait analysis accuracy improvements.", "source_ids": ["S1"], "confidence": "medium", "note": null}], "overall_confidence": "medium", "insufficient_evidence": false}',
+        retrieval,
+    )
+
+    assert parsed.claims[0].source_ids == ["S1"]
+
+
+def test_parse_grounded_answer_rejects_unknown_source_ids():
+    plan = infer_retrieval_plan("Compare results for gait analysis")
+    candidate = make_candidate(
+        text="This results section reports strong gait analysis accuracy improvements.",
+        score=0.82,
+        paper_id="paper-a",
+        title="Paper A",
+        year=2024,
+        section_label="Results",
+        section_heading="Results",
+    )
+    reranked = rerank_evidence_candidates("Compare results for gait analysis", plan, [candidate])
+    selected = select_evidence_chunks(plan, reranked)
+    retrieval = RetrievalResult(
+        plan=plan,
+        dense_candidates=[candidate],
+        filtered_candidates=[candidate],
+        reranked_candidates=reranked,
+        selected_chunks=selected,
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        parse_grounded_answer(
+            '{"answer_summary": "Unsupported.", "claims": [{"claim_text": "Bad citation.", "source_ids": ["S9"], "confidence": "medium", "note": null}], "overall_confidence": "medium", "insufficient_evidence": false}',
+            retrieval,
+        )
+
+
+def test_parse_grounded_answer_rejects_claims_with_too_little_support():
+    plan = infer_retrieval_plan("Compare results for gait analysis")
+    candidate = make_candidate(
+        text="This results section reports strong gait analysis accuracy improvements.",
+        score=0.82,
+        paper_id="paper-a",
+        title="Paper A",
+        year=2024,
+        section_label="Results",
+        section_heading="Results",
+    )
+    reranked = rerank_evidence_candidates("Compare results for gait analysis", plan, [candidate])
+    selected = select_evidence_chunks(plan, reranked)
+    retrieval = RetrievalResult(
+        plan=plan,
+        dense_candidates=[candidate],
+        filtered_candidates=[candidate],
+        reranked_candidates=reranked,
+        selected_chunks=selected,
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        parse_grounded_answer(
+            '{"answer_summary": "Unsupported.", "claims": [{"claim_text": "The paper studies marine biology taxonomies.", "source_ids": ["S1"], "confidence": "medium", "note": null}], "overall_confidence": "medium", "insufficient_evidence": false}',
+            retrieval,
+        )
+
+
+def test_parse_grounded_answer_downgrades_overconfident_claims():
+    plan = infer_retrieval_plan("Compare results for gait analysis")
+    candidate = make_candidate(
+        text="The algorithm uses reward shaping for planning and reports stronger results.",
+        score=0.82,
+        paper_id="paper-a",
+        title="Paper A",
+        year=2024,
+        section_label="Results",
+        section_heading="Results",
+    )
+    reranked = rerank_evidence_candidates("Compare results for gait analysis", plan, [candidate])
+    selected = select_evidence_chunks(plan, reranked)
+    retrieval = RetrievalResult(
+        plan=plan,
+        dense_candidates=[candidate],
+        filtered_candidates=[candidate],
+        reranked_candidates=reranked,
+        selected_chunks=selected,
+    )
+
+    parsed = parse_grounded_answer(
+        '{"answer_summary": "Summary.", "claims": [{"claim_text": "The method improves planning reliability.", "source_ids": ["S1"], "confidence": "high", "note": null}], "overall_confidence": "high", "insufficient_evidence": false}',
+        retrieval,
+    )
+
+    assert parsed.claims[0].confidence in {"medium", "low"}
+    assert parsed.claims[0].calibrated_confidence == parsed.claims[0].confidence
+    assert parsed.claims[0].support_score is not None
+
+
+def test_parse_grounded_answer_prunes_low_relevance_claims_for_structured_generation_queries():
+    plan = infer_retrieval_plan("How are structured generation, constrained decoding, or grammar-based control used in these agent papers?")
+    candidate_a = make_candidate(
+        text="XGrammar 2 uses constrained decoding and dynamic grammar dispatch for structured generation.",
+        score=0.91,
+        paper_id="paper-a",
+        title="XGrammar 2",
+        year=2025,
+        section_label="Methods",
+        section_heading="TagDispatch",
+    )
+    candidate_b = make_candidate(
+        text="RS-Agent integrates specialized remote sensing models for real-world applications.",
+        score=0.82,
+        paper_id="paper-b",
+        title="RS-Agent",
+        year=2026,
+        section_label="Introduction",
+        section_heading="Introduction",
+    )
+    reranked = rerank_evidence_candidates(plan.query_text, plan, [candidate_a, candidate_b])
+    retrieval = RetrievalResult(
+        plan=plan,
+        dense_candidates=[candidate_a, candidate_b],
+        filtered_candidates=[candidate_a, candidate_b],
+        reranked_candidates=reranked,
+        selected_chunks=select_evidence_chunks(plan, reranked),
+    )
+
+    parsed = parse_grounded_answer(
+        '{"answer_summary": "Summary.", "claims": ['
+        '{"claim_text": "XGrammar 2 uses constrained decoding for structured generation.", "source_ids": ["S1"], "confidence": "medium", "note": null}, '
+        '{"claim_text": "RS-Agent integrates specialized models for remote sensing applications.", "source_ids": ["S2"], "confidence": "medium", "note": "The evidence does not provide information on how structured generation, constrained decoding, or grammar-based control are used in this context."}'
+        '], "overall_confidence": "medium", "insufficient_evidence": false}',
+        retrieval,
+    )
+
+    assert len(parsed.claims) == 1
+    assert parsed.claims[0].source_ids == ["S1"]
+    assert parsed.insufficient_evidence is True
+
+
+def test_build_deterministic_grounded_answer_uses_selected_chunks():
+    plan = infer_retrieval_plan("Compare results for gait analysis")
+    candidate = make_candidate(
+        text="This results section reports strong gait analysis accuracy improvements.",
+        score=0.82,
+        paper_id="paper-a",
+        title="Paper A",
+        year=2024,
+        section_label="Results",
+        section_heading="Results",
+    )
+    reranked = rerank_evidence_candidates("Compare results for gait analysis", plan, [candidate])
+    selected = select_evidence_chunks(plan, reranked)
+    retrieval = RetrievalResult(
+        plan=plan,
+        dense_candidates=[candidate],
+        filtered_candidates=[candidate],
+        reranked_candidates=reranked,
+        selected_chunks=selected,
+    )
+
+    grounded = build_deterministic_grounded_answer(retrieval)
+    rendered = format_grounded_answer_text(grounded)
+
+    assert grounded.insufficient_evidence is True
+    assert grounded.claims[0].source_ids == ["S1"]
+    assert "[S1]" in rendered
+
+
+def test_synthesize_grounded_answer_falls_back_after_two_invalid_attempts(monkeypatch):
+    plan = infer_retrieval_plan("Compare results for gait analysis")
+    candidate = make_candidate(
+        text="This results section reports strong gait analysis accuracy improvements.",
+        score=0.82,
+        paper_id="paper-a",
+        title="Paper A",
+        year=2024,
+        section_label="Results",
+        section_heading="Results",
+    )
+    reranked = rerank_evidence_candidates("Compare results for gait analysis", plan, [candidate])
+    selected = select_evidence_chunks(plan, reranked)
+    retrieval = RetrievalResult(
+        plan=plan,
+        dense_candidates=[candidate],
+        filtered_candidates=[candidate],
+        reranked_candidates=reranked,
+        selected_chunks=selected,
+    )
+
+    class FakeResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+    responses = iter([
+        FakeResponse('{"answer_summary": "Bad.", "claims": [{"claim_text": "Marine biology taxonomy.", "source_ids": ["S1"], "confidence": "high", "note": null}], "overall_confidence": "high", "insufficient_evidence": false}'),
+        FakeResponse('{"answer_summary": "Still bad.", "claims": [{"claim_text": "Marine biology taxonomy.", "source_ids": ["S1"], "confidence": "high", "note": null}], "overall_confidence": "high", "insufficient_evidence": false}'),
+    ])
+
+    import main
+
+    monkeypatch.setattr(main.Settings, "_llm", type("FakeLLM", (), {"complete": staticmethod(lambda prompt: next(responses))})())
+
+    grounded = synthesize_grounded_answer("Compare results for gait analysis", "", retrieval)
+
+    assert grounded.insufficient_evidence is True
+    assert grounded.claims[0].note == "Deterministic retrieval fallback"

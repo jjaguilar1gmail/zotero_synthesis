@@ -115,7 +115,7 @@ Open `index.html` directly in your browser — no separate frontend server neede
 
 1. **Pick a collection** from the sidebar
 2. **Click "Index Collection"** — reads all PDFs in that Zotero folder, detects academic sections, creates section-aware passage chunks, attaches Zotero metadata to every chunk, and stores embeddings locally in ChromaDB. Only needs to run once per collection (or after adding new papers)
-3. **Chat** — ask anything across all papers in the collection. Retrieval now does a lightweight multi-stage pass: query-aware metadata filtering, dense retrieval, paper grouping, heuristic reranking, and evidence synthesis. Sources with relevance scores appear under each response
+3. **Chat** — ask anything across all papers in the collection. Retrieval now does a lightweight multi-stage pass: query-aware metadata filtering, dense retrieval, paper grouping, heuristic reranking, and evidence synthesis. Answers are now returned with a grounded contract: summary text, claim-level source citations, and confidence labels. Sources with relevance scores appear under each response
 
 ### Example questions
 
@@ -134,6 +134,7 @@ Open `index.html` directly in your browser — no separate frontend server neede
 - Indexed chunks now carry Zotero metadata including title, authors, year, venue, abstract, tags, paper key, attachment key, collection id, and page number
 - Ingestion now chunks papers by detected sections such as Abstract, Introduction, Methods, Results, Discussion, and Conclusion before creating passage-level retrieval chunks
 - Retrieval is now paper-aware rather than raw top-k only: it retrieves a larger dense candidate set, applies query-driven metadata constraints when available, groups evidence by paper, reranks candidates, and then synthesizes from the selected evidence set
+- Answer synthesis now uses a grounding contract instead of freeform prose only: each claim is tied to source ids from the selected evidence set, includes a confidence label, and falls back to a deterministic evidence-only grounded response if the LLM output fails validation
 - The Zotero database is opened read-only, but avoid having Zotero running during a large indexing job to prevent lock conflicts
 - PDFs stored in Zotero's linked-file mode may need path adjustments in `main.py`
 
@@ -177,7 +178,7 @@ Run a retrieval evaluation question set against an indexed Zotero collection:
 python tools/evaluate_retrieval.py --collection-id 123 --questions-file docs/architecture/retrieval_eval_question_set.example.json --output-dir debug_output/retrieval_eval
 ```
 
-Add `--with-answer` if you also want synthesized answers captured alongside the retrieval evidence for each evaluation query.
+Add `--with-answer` if you also want grounded synthesized answers captured alongside the retrieval evidence for each evaluation query. The evaluation output now also records whether the generated answer satisfied the claim-citation contract.
 
 Generate a structurally diverse recommendation shortlist directly from your Zotero library:
 

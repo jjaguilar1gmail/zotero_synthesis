@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.core.node_parser import SentenceSplitter
@@ -257,6 +257,34 @@ class RetrievalResult:
     filtered_candidates: list[NodeWithScore]
     reranked_candidates: list[EvidenceChunk]
     selected_chunks: list[EvidenceChunk]
+
+
+ALLOWED_CONFIDENCE_LABELS = {"low", "medium", "high"}
+CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+MIN_GROUNDED_CLAIM_SUPPORT = 0.06
+LOW_RELEVANCE_NOTE_MARKERS = (
+    "does not provide information",
+    "does not directly answer",
+    "not explicitly stated",
+    "limited information available",
+    "not fully explored",
+)
+
+
+class GroundedClaim(BaseModel):
+    claim_text: str = Field(min_length=1)
+    source_ids: list[str] = Field(default_factory=list)
+    confidence: str = "medium"
+    note: Optional[str] = None
+    support_score: Optional[float] = None
+    calibrated_confidence: Optional[str] = None
+
+
+class GroundedAnswer(BaseModel):
+    answer_summary: str = Field(min_length=1)
+    claims: list[GroundedClaim] = Field(default_factory=list)
+    overall_confidence: str = "medium"
+    insufficient_evidence: bool = False
 
 
 
@@ -1005,35 +1033,279 @@ def build_answer_prompt(question: str, history_text: str, retrieval: RetrievalRe
     history_block = f"Conversation so far:\n{history_text}\n\n" if history_text else ""
     retrieval_block = "\n".join(evidence_lines) if evidence_lines else "No evidence retrieved."
     plan_block = f"Retrieval notes: {'; '.join(plan_notes)}\n\n" if plan_notes else ""
+    route_guidance = build_route_specific_answer_guidance(retrieval)
+    route_block = f"Route guidance:\n{route_guidance}\n\n" if route_guidance else ""
 
     return (
         "You are answering questions over a Zotero paper collection. Use only the provided evidence. "
-        "Synthesize across papers when useful, prefer concrete claims, and say when the evidence is insufficient. "
-        "Cite evidence inline using source ids like [S1] or [S2].\n\n"
+        "Return valid JSON only with this exact schema: "
+        '{"answer_summary": string, "claims": [{"claim_text": string, "source_ids": [string], "confidence": "low|medium|high", "note": string|null}], '
+        '"overall_confidence": "low|medium|high", "insufficient_evidence": boolean}. '
+        "Every claim must cite one or more source ids from the provided evidence. "
+        "If the evidence is incomplete, set insufficient_evidence=true and say so in the answer_summary or claim note.\n\n"
         f"{history_block}"
         f"{plan_block}"
+        f"{route_block}"
         f"Question: {question}\n\n"
         f"Evidence:\n{retrieval_block}\n\n"
-        "Answer:"
+        "JSON answer:"
     )
 
 
-def synthesize_answer(question: str, history_text: str, retrieval: RetrievalResult) -> str:
+def build_route_specific_answer_guidance(retrieval: RetrievalResult) -> str:
+    route_label = retrieval.plan.route_label
+    topic_keywords = set(retrieval.plan.topic_keywords)
+
+    if route_label == "comparison":
+        guidance = [
+            "Synthesize differences or tradeoffs across papers instead of listing unrelated paper-by-paper facts.",
+            "Prefer 2 to 4 claims that explicitly compare mechanisms, workflows, objectives, or tradeoffs.",
+            "Omit claims when the cited evidence does not clearly answer the comparison question.",
+        ]
+        if {"tool", "tools", "acting", "action", "workflow"} & topic_keywords:
+            guidance.append("For tool-use questions, describe the loop structure: reasoning, tool or action choice, execution, observation, and update.")
+        if {"structured generation", "constrained decoding", "grammar", "xgrammar"} & topic_keywords:
+            guidance.append("For structured-generation questions, stay focused on constrained decoding, grammar dispatch, schema control, or tool-calling structure. Do not include generic application papers unless they explicitly discuss those controls.")
+        return "\n".join(f"- {line}" for line in guidance)
+
+    if route_label == "survey_synthesis":
+        return "\n".join(
+            [
+                "- Summarize cross-paper themes, research agendas, bottlenecks, and open problems rather than isolated paper details.",
+                "- Avoid domain-specific examples unless they directly support a broader agenda-level point.",
+                "- Prefer a small number of strong themes over broad but weak coverage.",
+            ]
+        )
+
+    if route_label == "single_paper_explanation":
+        return "\n".join(
+            [
+                "- Focus on one target paper only.",
+                "- Explain the problem, the main idea, and how the method works step by step.",
+                "- Use evaluation details only when they clarify the method or why it matters.",
+            ]
+        )
+
+    return ""
+
+
+def extract_json_object(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("No JSON object found in model output")
+    return stripped[start : end + 1]
+
+
+def compute_claim_support_against_texts(claim_text: str, supporting_texts: list[str]) -> tuple[float, float]:
+    claim_terms = tokenize_query_terms(claim_text)
+    if not claim_terms or not supporting_texts:
+        return 0.0, 0.0
+
+    overlaps = [
+        lexical_overlap_score(claim_terms, supporting_text)
+        for supporting_text in supporting_texts
+        if supporting_text
+    ]
+    if not overlaps:
+        return 0.0, 0.0
+    return max(overlaps), sum(overlaps) / len(overlaps)
+
+
+def infer_calibrated_confidence(source_count: int, max_support: float, avg_support: float) -> str:
+    if source_count >= 2 and (avg_support >= 0.18 or max_support >= 0.28):
+        return "high"
+    if max_support >= 0.16 or (source_count >= 2 and avg_support >= 0.1):
+        return "medium"
+    return "low"
+
+
+def build_claim_supporting_texts(claim: GroundedClaim, retrieval: RetrievalResult) -> list[str]:
+    source_map = {chunk.source_id: chunk for chunk in retrieval.selected_chunks}
+    supporting_texts: list[str] = []
+    for source_id in claim.source_ids:
+        chunk = source_map.get(source_id)
+        if chunk is None:
+            continue
+        supporting_texts.append(
+            " ".join(
+                filter(
+                    None,
+                    [
+                        chunk.title,
+                        chunk.section_heading or chunk.section_label or "",
+                        chunk.node.text[:800],
+                    ],
+                )
+            )
+        )
+    return supporting_texts
+
+
+def build_grounding_alignment_terms(retrieval: RetrievalResult) -> set[str]:
+    terms = tokenize_query_terms(retrieval.plan.query_text)
+    if retrieval.plan.topic_keywords:
+        terms.update(tokenize_query_terms(" ".join(retrieval.plan.topic_keywords)))
+    return terms
+
+
+def claim_has_low_route_relevance(claim: GroundedClaim, retrieval: RetrievalResult) -> bool:
+    if retrieval.plan.route_label not in {"comparison", "survey_synthesis", "single_paper_explanation"}:
+        return False
+
+    note_text = normalize_text(claim.note).lower()
+    if not note_text or not any(marker in note_text for marker in LOW_RELEVANCE_NOTE_MARKERS):
+        return False
+
+    alignment_score = lexical_overlap_score(build_grounding_alignment_terms(retrieval), claim.claim_text)
+
+    if retrieval.plan.route_label == "survey_synthesis":
+        return alignment_score < 0.2
+    return alignment_score < 0.18
+
+
+def prune_grounded_claims_for_route(claims: list[GroundedClaim], retrieval: RetrievalResult) -> list[GroundedClaim]:
+    pruned_claims = [claim for claim in claims if not claim_has_low_route_relevance(claim, retrieval)]
+    return pruned_claims or claims
+
+
+def validate_grounded_answer(answer: GroundedAnswer, retrieval: RetrievalResult) -> GroundedAnswer:
+    valid_source_ids = {chunk.source_id for chunk in retrieval.selected_chunks}
+    if answer.overall_confidence not in ALLOWED_CONFIDENCE_LABELS:
+        raise ValueError(f"Invalid overall confidence: {answer.overall_confidence}")
+
+    validated_claims: list[GroundedClaim] = []
+    calibrated_claim_confidences: list[str] = []
+    for claim in answer.claims:
+        if claim.confidence not in ALLOWED_CONFIDENCE_LABELS:
+            raise ValueError(f"Invalid claim confidence: {claim.confidence}")
+        if not claim.source_ids:
+            raise ValueError("Every grounded claim must include at least one source id")
+        invalid_source_ids = [source_id for source_id in claim.source_ids if source_id not in valid_source_ids]
+        if invalid_source_ids:
+            raise ValueError(f"Claim cited unknown source ids: {', '.join(invalid_source_ids)}")
+
+        max_support, avg_support = compute_claim_support_against_texts(
+            claim.claim_text,
+            build_claim_supporting_texts(claim, retrieval),
+        )
+        if max_support < MIN_GROUNDED_CLAIM_SUPPORT:
+            raise ValueError("Claim text is too weakly supported by its cited evidence")
+
+        calibrated_confidence = infer_calibrated_confidence(len(claim.source_ids), max_support, avg_support)
+        if CONFIDENCE_RANK[claim.confidence] > CONFIDENCE_RANK[calibrated_confidence]:
+            claim.confidence = calibrated_confidence
+        claim.support_score = round(max_support, 3)
+        claim.calibrated_confidence = calibrated_confidence
+        calibrated_claim_confidences.append(calibrated_confidence)
+        validated_claims.append(claim)
+
+    pruned_claims = prune_grounded_claims_for_route(validated_claims, retrieval)
+    if len(pruned_claims) < len(validated_claims):
+        answer.insufficient_evidence = True
+    validated_claims = pruned_claims
+    answer.claims = validated_claims
+    if calibrated_claim_confidences and validated_claims:
+        overall_calibrated = infer_calibrated_confidence(
+            len(validated_claims),
+            max(claim.support_score or 0.0 for claim in validated_claims),
+            sum(claim.support_score or 0.0 for claim in validated_claims) / len(validated_claims),
+        )
+        if answer.insufficient_evidence and overall_calibrated == "high":
+            overall_calibrated = "medium"
+        if CONFIDENCE_RANK[answer.overall_confidence] > CONFIDENCE_RANK[overall_calibrated]:
+            answer.overall_confidence = overall_calibrated
+    elif not validated_claims:
+        answer.overall_confidence = "low"
+        answer.insufficient_evidence = True
+    return answer
+
+
+def parse_grounded_answer(raw_text: str, retrieval: RetrievalResult) -> GroundedAnswer:
+    payload = json.loads(extract_json_object(raw_text))
+    answer = GroundedAnswer.model_validate(payload)
+    return validate_grounded_answer(answer, retrieval)
+
+
+def build_grounded_answer_repair_prompt(raw_output: str, retrieval: RetrievalResult) -> str:
+    valid_source_ids = ", ".join(chunk.source_id for chunk in retrieval.selected_chunks)
+    route_guidance = build_route_specific_answer_guidance(retrieval)
+    route_block = f"Route guidance:\n{route_guidance}\n\n" if route_guidance else ""
+    return (
+        "Repair the following grounded answer so it becomes valid JSON with the required schema. "
+        "Keep the content consistent with the original answer, but remove unsupported claims, fix citations, and lower confidence when evidence is weak. "
+        f"Valid source ids are: {valid_source_ids}.\n\n"
+        f"{route_block}"
+        f"Original output:\n{raw_output}\n"
+    )
+
+
+def format_grounded_answer_text(answer: GroundedAnswer) -> str:
+    lines = [answer.answer_summary.strip()]
+    if answer.claims:
+        lines.append("")
+        for claim in answer.claims:
+            citation_text = " ".join(f"[{source_id}]" for source_id in claim.source_ids)
+            note_text = f" ({claim.note})" if claim.note else ""
+            lines.append(f"- {claim.claim_text} {citation_text} Confidence: {claim.confidence}.{note_text}")
+    if answer.insufficient_evidence:
+        lines.append("")
+        lines.append("Evidence is incomplete for parts of this answer.")
+    return "\n".join(lines).strip()
+
+
+def build_deterministic_grounded_answer(retrieval: RetrievalResult) -> GroundedAnswer:
+    if not retrieval.selected_chunks:
+        return GroundedAnswer(
+            answer_summary="No supporting evidence was retrieved.",
+            claims=[],
+            overall_confidence="low",
+            insufficient_evidence=True,
+        )
+
+    claims: list[GroundedClaim] = []
+    for chunk in retrieval.selected_chunks[: min(4, len(retrieval.selected_chunks))]:
+        excerpt = normalize_text(chunk.node.text)[:220]
+        claims.append(
+            GroundedClaim(
+                claim_text=excerpt,
+                source_ids=[chunk.source_id],
+                confidence="low",
+                note="Deterministic retrieval fallback",
+            )
+        )
+
+    return GroundedAnswer(
+        answer_summary="Answer synthesis is unavailable, so this response lists grounded evidence directly.",
+        claims=claims,
+        overall_confidence="low",
+        insufficient_evidence=True,
+    )
+
+
+def synthesize_grounded_answer(question: str, history_text: str, retrieval: RetrievalResult) -> GroundedAnswer:
     prompt = build_answer_prompt(question, history_text, retrieval)
     response = Settings.llm.complete(prompt)
-    return getattr(response, "text", str(response)).strip()
+    raw_text = getattr(response, "text", str(response)).strip()
+    try:
+        return parse_grounded_answer(raw_text, retrieval)
+    except (json.JSONDecodeError, ValidationError, ValueError):
+        repair_prompt = build_grounded_answer_repair_prompt(raw_text, retrieval)
+        repair_response = Settings.llm.complete(repair_prompt)
+        repair_text = getattr(repair_response, "text", str(repair_response)).strip()
+        try:
+            return parse_grounded_answer(repair_text, retrieval)
+        except (json.JSONDecodeError, ValidationError, ValueError):
+            logger.warning("Grounded answer synthesis failed validation twice; returning deterministic evidence fallback")
+            return build_deterministic_grounded_answer(retrieval)
 
 
 def build_retrieval_only_response(retrieval: RetrievalResult) -> str:
-    if not retrieval.selected_chunks:
-        return "Retrieval completed, but no supporting evidence chunks were selected."
-
-    lines = ["Retrieval completed, but answer synthesis is unavailable. Top evidence:"]
-    for chunk in retrieval.selected_chunks[:4]:
-        heading = chunk.section_heading or chunk.section_label or "Unlabeled section"
-        excerpt = normalize_text(chunk.node.text)[:220]
-        lines.append(f"- [{chunk.source_id}] {chunk.title} | {heading} | {excerpt}")
-    return "\n".join(lines)
+    return format_grounded_answer_text(build_deterministic_grounded_answer(retrieval))
 
 
 def dedupe_paper_records(records: list[PaperRecord]) -> list[PaperRecord]:
@@ -1068,6 +1340,16 @@ def format_sources_from_evidence(chunks: list[EvidenceChunk]) -> list[dict]:
         metadata = chunk.node.node.metadata or {}
         page_number = metadata.get("page_number")
         effective_section_label = infer_effective_section_label(metadata)
+        support_text = " ".join(
+            filter(
+                None,
+                [
+                    chunk.title,
+                    chunk.section_heading or effective_section_label or metadata.get("section_label") or "",
+                    chunk.node.text[:800],
+                ],
+            )
+        )
         sources.append(
             {
                 "source_id": chunk.source_id,
@@ -1082,6 +1364,7 @@ def format_sources_from_evidence(chunks: list[EvidenceChunk]) -> list[dict]:
                 "score": round(chunk.rerank_score, 3),
                 "dense_score": round(chunk.dense_score, 3),
                 "snippet": chunk.node.text[:240] + "..." if len(chunk.node.text) > 240 else chunk.node.text,
+                "support_text": support_text,
             }
         )
     return sources
@@ -1457,13 +1740,18 @@ def chat_endpoint(req: ChatRequest):
         retrieval = run_retrieval_pipeline(index, req.message, collection_id=req.collection_id)
         llm_warning = None
         try:
-            response_text = synthesize_answer(req.message, history_text, retrieval)
+            grounded_answer = synthesize_grounded_answer(req.message, history_text, retrieval)
         except AuthenticationError:
             llm_warning = "LLM synthesis unavailable because the configured OpenRouter credentials were rejected. Returning retrieval evidence only."
-            response_text = build_retrieval_only_response(retrieval)
+            grounded_answer = build_deterministic_grounded_answer(retrieval)
+        except (json.JSONDecodeError, ValidationError, ValueError):
+            llm_warning = "LLM synthesis returned an invalid grounded answer. Returning retrieval evidence only."
+            grounded_answer = build_deterministic_grounded_answer(retrieval)
+        response_text = format_grounded_answer_text(grounded_answer)
         sources = format_sources_from_evidence(retrieval.selected_chunks)
         return {
             "response": response_text,
+            "grounded_answer": grounded_answer.model_dump(),
             "sources": sources,
             "warning": llm_warning,
             "retrieval": {

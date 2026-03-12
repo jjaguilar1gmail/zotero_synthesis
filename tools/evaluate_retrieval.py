@@ -8,7 +8,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from main import format_sources_from_evidence, get_collection_index, run_retrieval_pipeline, synthesize_answer
+from main import (
+    MIN_GROUNDED_CLAIM_SUPPORT,
+    compute_claim_support_against_texts,
+    infer_calibrated_confidence,
+    format_grounded_answer_text,
+    format_sources_from_evidence,
+    get_collection_index,
+    run_retrieval_pipeline,
+    synthesize_grounded_answer,
+)
 
 
 def load_question_set(path: Path) -> list[dict[str, Any]]:
@@ -117,6 +126,97 @@ def evaluate_route_expectation(expected_route: str | None, retrieval_summary: di
     }
 
 
+def evaluate_grounding_contract(answer: dict[str, Any] | None, retrieval_summary: dict[str, Any]) -> dict[str, Any]:
+    if not answer:
+        return {"status": "no-answer", "checks": []}
+
+    source_lookup = {
+        source.get("source_id"): source
+        for source in retrieval_summary.get("sources", [])
+        if source.get("source_id")
+    }
+    valid_source_ids = set(source_lookup)
+    checks: list[dict[str, Any]] = []
+    claims = answer.get("claims") or []
+
+    checks.append(
+        {
+            "name": "answer_summary_present",
+            "passed": bool(str(answer.get("answer_summary") or "").strip()),
+            "actual": bool(str(answer.get("answer_summary") or "").strip()),
+            "expected": True,
+        }
+    )
+    checks.append(
+        {
+            "name": "all_claims_cited",
+            "passed": all(claim.get("source_ids") for claim in claims),
+            "actual": len([claim for claim in claims if claim.get("source_ids")]),
+            "expected": len(claims),
+        }
+    )
+    checks.append(
+        {
+            "name": "all_citations_valid",
+            "passed": all(source_id in valid_source_ids for claim in claims for source_id in (claim.get("source_ids") or [])),
+            "actual": sorted({source_id for claim in claims for source_id in (claim.get("source_ids") or [])}),
+            "expected": sorted(valid_source_ids),
+        }
+    )
+
+    support_scores: list[float] = []
+    calibrated_confidences_match = True
+    for claim in claims:
+        supporting_texts = []
+        for source_id in claim.get("source_ids") or []:
+            source = source_lookup.get(source_id)
+            if not source:
+                continue
+            supporting_texts.append(
+                str(
+                    source.get("support_text")
+                    or " ".join(
+                        filter(
+                            None,
+                            [
+                                str(source.get("title") or ""),
+                                str(source.get("section_heading") or source.get("section_label") or ""),
+                                str(source.get("snippet") or ""),
+                            ],
+                        )
+                    )
+                )
+            )
+        max_support, avg_support = compute_claim_support_against_texts(str(claim.get("claim_text") or ""), supporting_texts)
+        support_scores.append(max_support)
+        calibrated_confidence = infer_calibrated_confidence(len(claim.get("source_ids") or []), max_support, avg_support)
+        if claim.get("confidence") not in {calibrated_confidence, claim.get("calibrated_confidence")}:
+            if claim.get("confidence") not in {"low", "medium", "high"}:
+                calibrated_confidences_match = False
+            elif {"low": 0, "medium": 1, "high": 2}[claim.get("confidence")] > {"low": 0, "medium": 1, "high": 2}[calibrated_confidence]:
+                calibrated_confidences_match = False
+
+    checks.append(
+        {
+            "name": "claims_have_support_overlap",
+            "passed": all(score >= MIN_GROUNDED_CLAIM_SUPPORT for score in support_scores) if claims else True,
+            "actual": [round(score, 3) for score in support_scores],
+            "expected": f">= {MIN_GROUNDED_CLAIM_SUPPORT}",
+        }
+    )
+    checks.append(
+        {
+            "name": "confidence_not_overstated",
+            "passed": calibrated_confidences_match,
+            "actual": [claim.get("confidence") for claim in claims],
+            "expected": "backend-calibrated confidence",
+        }
+    )
+
+    status = "pass" if all(check["passed"] for check in checks) else "fail"
+    return {"status": status, "checks": checks}
+
+
 def build_retrieval_summary(result) -> dict[str, Any]:
     return {
         "route": {
@@ -135,17 +235,32 @@ def build_retrieval_summary(result) -> dict[str, Any]:
     }
 
 
+def grounded_answer_uses_deterministic_fallback(grounded_answer: dict[str, Any]) -> bool:
+    for claim in grounded_answer.get("claims") or []:
+        if claim.get("note") == "Deterministic retrieval fallback":
+            return True
+    return False
+
+
 def build_markdown_report(results: list[dict[str, Any]]) -> str:
+    fallback_count = sum(1 for result in results if result.get("fallback_used"))
+    fallback_ids = [result["id"] for result in results if result.get("fallback_used")]
     lines = [
         "# Retrieval Evaluation",
         "",
-        "| ID | Status | Route | Route Check | Papers | Evidence | Query |",
-        "|---|---|---|---|---:|---:|---|",
+        f"Questions: {len(results)}",
+        f"Deterministic fallback answers: {fallback_count}",
+        f"Fallback question IDs: {', '.join(fallback_ids) if fallback_ids else 'none'}",
+        "",
+        "| ID | Status | Route | Route Check | Grounding | Fallback | Papers | Evidence | Query |",
+        "|---|---|---|---|---|---|---:|---:|---|",
     ]
     for result in results:
         summary = result["retrieval"]
+        grounding_status = result.get("grounding_result", {}).get("status", "n/a")
+        fallback_status = "yes" if result.get("fallback_used") else "no"
         lines.append(
-            f"| {result['id']} | {result['expectation_result']['status']} | {summary['route']['label']} | {result['route_result']['status']} | {summary['papers_considered']} | {summary['evidence_chunks']} | {result['query']} |"
+            f"| {result['id']} | {result['expectation_result']['status']} | {summary['route']['label']} | {result['route_result']['status']} | {grounding_status} | {fallback_status} | {summary['papers_considered']} | {summary['evidence_chunks']} | {result['query']} |"
         )
 
     for result in results:
@@ -171,6 +286,10 @@ def build_markdown_report(results: list[dict[str, Any]]) -> str:
             )
         if result.get("answer"):
             lines.extend(["", "Answer Preview:", "", result["answer"]])
+        if result.get("grounding_result"):
+            lines.extend(["", f"Grounding Check: {result['grounding_result']['status']}"])
+        if "fallback_used" in result:
+            lines.append(f"Deterministic Fallback Used: {'yes' if result['fallback_used'] else 'no'}")
 
     return "\n".join(lines) + "\n"
 
@@ -221,7 +340,13 @@ def main() -> None:
             "sources": sources,
         }
         if args.with_answer:
-            result["answer"] = synthesize_answer(query, "", retrieval)
+            grounded_answer = synthesize_grounded_answer(query, "", retrieval)
+            result["grounded_answer"] = grounded_answer.model_dump()
+            result["fallback_used"] = grounded_answer_uses_deterministic_fallback(result["grounded_answer"])
+            result["answer"] = format_grounded_answer_text(grounded_answer)
+            retrieval_summary_with_sources = dict(retrieval_summary)
+            retrieval_summary_with_sources["sources"] = sources
+            result["grounding_result"] = evaluate_grounding_contract(result["grounded_answer"], retrieval_summary_with_sources)
         results.append(result)
 
     summary = {
@@ -231,6 +356,8 @@ def main() -> None:
         "fail_count": sum(result["expectation_result"]["status"] == "fail" for result in results),
         "route_pass_count": sum(result["route_result"]["status"] == "pass" for result in results),
         "route_fail_count": sum(result["route_result"]["status"] == "fail" for result in results),
+        "fallback_count": sum(1 for result in results if result.get("fallback_used")),
+        "fallback_question_ids": [result["id"] for result in results if result.get("fallback_used")],
         "results": results,
     }
 

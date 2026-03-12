@@ -763,6 +763,59 @@ def lexical_overlap_score(query_terms: set[str], text: str) -> float:
     return len(query_terms & text_terms) / len(query_terms)
 
 
+def normalize_chunk_fingerprint_text(text: str) -> str:
+    normalized = normalize_text(text).lower()
+    normalized = re.sub(r"\bfig\.?(?=\s*\d)", "figure", normalized)
+    normalized = re.sub(r"\beq\.?(?=\s*\d)", "equation", normalized)
+    normalized = re.sub(r"\b(?:figure|table|fig|eq|equation)\s+\d+[a-z]?\b", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def build_chunk_fingerprint(chunk: EvidenceChunk) -> str:
+    metadata = chunk.node.node.metadata or {}
+    heading = normalize_text(chunk.section_heading or chunk.section_label or metadata.get("section_heading") or "")
+    text = normalize_chunk_fingerprint_text(chunk.node.text)
+    title = normalize_text(chunk.title)
+    title_terms = title.lower().split()[:6]
+    heading_terms = heading.lower().split()[:8]
+    content_terms = text.split()[:40]
+    return " | ".join(
+        [
+            " ".join(title_terms),
+            " ".join(heading_terms),
+            " ".join(content_terms),
+        ]
+    ).strip()
+
+
+def is_near_duplicate_chunk(candidate: EvidenceChunk, selected: list[EvidenceChunk]) -> bool:
+    candidate_fp = build_chunk_fingerprint(candidate)
+    if not candidate_fp:
+        return False
+
+    candidate_terms = set(candidate_fp.split())
+    if not candidate_terms:
+        return False
+
+    for existing in selected:
+        if existing.paper_id != candidate.paper_id:
+            continue
+        existing_fp = build_chunk_fingerprint(existing)
+        if not existing_fp:
+            continue
+        if candidate_fp == existing_fp:
+            return True
+
+        existing_terms = set(existing_fp.split())
+        overlap = len(candidate_terms & existing_terms)
+        union = len(candidate_terms | existing_terms)
+        if union and (overlap / union) >= 0.82:
+            return True
+    return False
+
+
 def rerank_evidence_candidates(query_text: str, plan: RetrievalPlan, candidates: list[NodeWithScore]) -> list[EvidenceChunk]:
     query_terms = tokenize_query_terms(query_text)
     query_terms.update(tokenize_query_terms(" ".join(plan.topic_keywords)))
@@ -846,14 +899,18 @@ def select_evidence_chunks(plan: RetrievalPlan, reranked_candidates: list[Eviden
 
     for _, paper_candidates in selected_papers:
         if paper_candidates:
-            selected.append(paper_candidates[0])
+            if not is_near_duplicate_chunk(paper_candidates[0], selected):
+                selected.append(paper_candidates[0])
 
     round_index = 1
     while len(selected) < plan.max_evidence_chunks:
         added = False
         for _, paper_candidates in selected_papers:
             if round_index < len(paper_candidates) and round_index < plan.per_paper_limit + 1:
-                selected.append(paper_candidates[round_index])
+                candidate = paper_candidates[round_index]
+                if is_near_duplicate_chunk(candidate, selected):
+                    continue
+                selected.append(candidate)
                 added = True
                 if len(selected) >= plan.max_evidence_chunks:
                     break

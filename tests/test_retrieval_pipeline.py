@@ -4,7 +4,9 @@ from pathlib import Path
 
 from main import (
     adaptively_filter_candidates,
+    build_chunk_fingerprint,
     build_dense_query_variants,
+    is_near_duplicate_chunk,
     SafeChromaVectorStore,
     build_retrieval_only_response,
     classify_query_route,
@@ -279,6 +281,104 @@ def test_reranking_and_selection_preserve_cross_paper_evidence():
     assert len(selected) >= 2
     assert {chunk.paper_id for chunk in selected} >= {"paper-a", "paper-b"}
     assert selected[0].source_id == "S1"
+
+
+def test_chunk_fingerprint_collapses_minor_formatting_differences():
+    plan = infer_retrieval_plan("Compare results for gait analysis")
+    candidates = [
+        make_candidate(
+            text="Figure 2 shows strong gait analysis accuracy gains across datasets.",
+            score=0.82,
+            paper_id="paper-a",
+            title="Paper A",
+            year=2024,
+            section_label="Results",
+            section_heading="Benchmark Results",
+        ),
+        make_candidate(
+            text="Fig. 2 shows strong gait analysis accuracy gains across datasets.",
+            score=0.81,
+            paper_id="paper-a",
+            title="Paper A",
+            year=2024,
+            section_label="Results",
+            section_heading="Benchmark Results",
+        ),
+    ]
+
+    reranked = rerank_evidence_candidates("Compare results for gait analysis", plan, candidates)
+
+    assert build_chunk_fingerprint(reranked[0]) == build_chunk_fingerprint(reranked[1])
+    assert is_near_duplicate_chunk(reranked[1], [reranked[0]])
+
+
+def test_selection_skips_near_duplicate_chunks_but_keeps_distinct_sections():
+    plan = infer_retrieval_plan("Compare results for gait analysis")
+    candidates = [
+        make_candidate(
+            text="This results section reports strong gait analysis accuracy improvements.",
+            score=0.91,
+            paper_id="paper-a",
+            title="Paper A",
+            year=2024,
+            section_label="Results",
+            section_heading="Benchmark Results",
+        ),
+        make_candidate(
+            text="This results section reports strong gait analysis accuracy improvements.",
+            score=0.9,
+            paper_id="paper-a",
+            title="Paper A",
+            year=2024,
+            section_label="Results",
+            section_heading="Benchmark Results",
+        ),
+        make_candidate(
+            text="The discussion explains why gait analysis fails on occluded samples.",
+            score=0.89,
+            paper_id="paper-b",
+            title="Paper B",
+            year=2025,
+            section_label="Discussion",
+            section_heading="Failure Analysis",
+        ),
+    ]
+
+    reranked = rerank_evidence_candidates("Compare results for gait analysis", plan, candidates)
+    selected = select_evidence_chunks(plan, reranked)
+
+    assert len(selected) == 2
+    assert any(chunk.section_heading == "Failure Analysis" for chunk in selected)
+
+
+def test_selection_keeps_identical_text_from_different_papers():
+    plan = infer_retrieval_plan("Compare results for gait analysis")
+    candidates = [
+        make_candidate(
+            text="This results section reports strong gait analysis accuracy improvements.",
+            score=0.91,
+            paper_id="paper-a",
+            title="Paper A",
+            year=2024,
+            section_label="Results",
+            section_heading="Benchmark Results",
+        ),
+        make_candidate(
+            text="This results section reports strong gait analysis accuracy improvements.",
+            score=0.9,
+            paper_id="paper-b",
+            title="Paper B",
+            year=2025,
+            section_label="Results",
+            section_heading="Benchmark Results",
+        ),
+    ]
+
+    reranked = rerank_evidence_candidates("Compare results for gait analysis", plan, candidates)
+    selected = select_evidence_chunks(plan, reranked)
+
+    assert len(selected) == 2
+    assert {chunk.paper_id for chunk in selected} == {"paper-a", "paper-b"}
 
 
 class FakeChromaCollection:
